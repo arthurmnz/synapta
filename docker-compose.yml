@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: synapta-postgres
+    hostname: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-synapta}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-synapta}
+      POSTGRES_DB: ${POSTGRES_DB:-synapta}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5433"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/docker/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+    networks:
+      synapta_net:
+        aliases:
+          - postgres
+          - db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-synapta} -d ${POSTGRES_DB:-synapta}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: synapta-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-synapta}:${POSTGRES_PASSWORD:-synapta}@${POSTGRES_HOST:-postgres}:5432/${POSTGRES_DB:-synapta}}
+      TEST_DATABASE_URL: ${DOCKER_TEST_DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-synapta}:${POSTGRES_PASSWORD:-synapta}@${POSTGRES_HOST:-postgres}:5432/synapta_test}
+      SECRET_KEY: ${SECRET_KEY:-synapta-local-docker-dev-secret-key-change-me-32b}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-720}
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:5173","http://127.0.0.1:5173"]}
+      SEED_ON_START: ${SEED_ON_START:-true}
+    networks:
+      - synapta_net
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
+        VITE_ENABLE_DEMO_LOGIN: ${VITE_ENABLE_DEMO_LOGIN:-${SEED_ON_START:-true}}
+    container_name: synapta-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      - synapta_net
+    ports:
+      - "5173:80"
+
+networks:
+  synapta_net:
+    driver: bridge
+
+volumes:
+  postgres_data:

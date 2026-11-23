@@ -1,0 +1,566 @@
+import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  AlertTriangle,
+  Award,
+  Check,
+  Clock,
+  RefreshCw,
+  Users,
+  X,
+} from 'lucide-react';
+import { clsx } from 'clsx';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  LoadingState,
+} from '../../components/ui';
+import { TopicPerformanceChart } from '../../components/charts/TopicPerformanceChart';
+import { AppShell } from '../../components/layout/AppShell';
+import { apiClient, ApiError } from '../../lib/apiClient';
+import {
+  formatDateTime,
+  formatPercent,
+  getPerformanceTierMeta,
+} from '../../lib/formatters';
+import type {
+  AnalyticsScope,
+  EntityId,
+  RetakeRequestOut,
+  TeacherClassroomOut,
+  TeacherListSummaryOut,
+  TeacherTopicAnalyticsOut,
+} from '../../types/api';
+
+export function TeacherDashboardPage() {
+  const [classrooms, setClassrooms] = useState<TeacherClassroomOut[]>([]);
+  const [lists, setLists] = useState<TeacherListSummaryOut[]>([]);
+  const [analytics, setAnalytics] = useState<TeacherTopicAnalyticsOut | null>(null);
+  const [retakeRequests, setRetakeRequests] = useState<RetakeRequestOut[]>([]);
+
+  const [selectedClassroomId, setSelectedClassroomId] = useState<string>('');
+  const [selectedListId, setSelectedListId] = useState<string>('');
+  const [scope, setScope] = useState<AnalyticsScope>('latest');
+
+  const [loadingInitial, setLoadingInitial] = useState(true);
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [decidingId, setDecidingId] = useState<EntityId | null>(null);
+
+  const loadMetadataAndQueue = useCallback(async () => {
+    setError(null);
+    try {
+      const [cls, allLists, pending] = await Promise.all([
+        apiClient.getTeacherClassrooms(),
+        apiClient.getTeacherLists(),
+        apiClient.getRetakeRequests('pending'),
+      ]);
+      setClassrooms(cls);
+      setLists(allLists);
+      setRetakeRequests(pending);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : 'Não foi possível carregar os dados iniciais do painel.'
+      );
+    }
+  }, []);
+
+  const loadAnalytics = useCallback(
+    async (classroomId: string, listId: string, currentScope: AnalyticsScope) => {
+      setLoadingAnalytics(true);
+      try {
+        const data = await apiClient.getTopicAnalytics({
+          classroomId: classroomId || null,
+          listId: listId || null,
+          scope: currentScope,
+        });
+        setAnalytics(data);
+      } catch (err) {
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : 'Não foi possível carregar a análise de assuntos.'
+        );
+      } finally {
+        setLoadingAnalytics(false);
+        setLoadingInitial(false);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    void (async () => {
+      await loadMetadataAndQueue();
+      await loadAnalytics('', '', 'latest');
+    })();
+  }, [loadMetadataAndQueue, loadAnalytics]);
+
+  const handleClassroomFilterChange = (newClassroomId: string) => {
+    setSelectedClassroomId(newClassroomId);
+    setSelectedListId('');
+    void loadAnalytics(newClassroomId, '', scope);
+  };
+
+  const handleListFilterChange = (newListId: string) => {
+    setSelectedListId(newListId);
+    void loadAnalytics(selectedClassroomId, newListId, scope);
+  };
+
+  const handleScopeChange = (newScope: AnalyticsScope) => {
+    setScope(newScope);
+    void loadAnalytics(selectedClassroomId, selectedListId, newScope);
+  };
+
+  const handleDecideRetake = async (requestId: EntityId, decision: 'approved' | 'rejected') => {
+    setDecidingId(requestId);
+    setError(null);
+    setActionMessage(null);
+    try {
+      const updated = await apiClient.decideRetakeRequest(requestId, decision);
+      setRetakeRequests((prev) => prev.filter((item) => item.id !== requestId));
+      setActionMessage(
+        decision === 'approved'
+          ? `Nova tentativa autorizada para ${updated.student_name} em "${updated.question_list_title}".`
+          : `Solicitação de ${updated.student_name} recusada.`
+      );
+      await loadAnalytics(selectedClassroomId, selectedListId, scope);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : 'Não foi possível processar a decisão da solicitação.'
+      );
+    } finally {
+      setDecidingId(null);
+    }
+  };
+
+  const visibleLists = selectedClassroomId
+    ? lists.filter((l) => String(l.classroom_id) === selectedClassroomId)
+    : lists;
+
+  const kpis = analytics?.kpis;
+
+  return (
+    <AppShell>
+      <div className="space-y-6">
+        {/* Page Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-[#DCE1EB] pb-5">
+          <div>
+            <h1 className="font-display text-2xl font-bold tracking-tight text-[#131B2E]">
+              Visão Analítica de Matemática
+            </h1>
+            <p className="mt-1 text-sm text-[#4B5568]">
+              Acompanhe o rendimento por assunto, identifique temas para reforço e gerencie pedidos
+              de nova tentativa.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link to="/teacher/classrooms">
+              <Button variant="primary">Gerenciar Turmas e Listas</Button>
+            </Link>
+            <Link to="/teacher/students">
+              <Button variant="outline" leftIcon={<Users className="h-4 w-4" />}>
+                Ver Alunos
+              </Button>
+            </Link>
+          </div>
+        </div>
+
+        {error && (
+          <Alert
+            tone="danger"
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                leftIcon={<RefreshCw className="h-3.5 w-3.5" />}
+                onClick={() => {
+                  void loadMetadataAndQueue();
+                  void loadAnalytics(selectedClassroomId, selectedListId, scope);
+                }}
+              >
+                Recarregar
+              </Button>
+            }
+          >
+            {error}
+          </Alert>
+        )}
+
+        {actionMessage && <Alert tone="success">{actionMessage}</Alert>}
+
+        {loadingInitial ? (
+          <LoadingState label="Carregando painel analítico..." variant="detail" />
+        ) : (
+          <>
+            {/* Unified Architectural KPI Ledger Strip */}
+            {kpis && (
+              <section
+                aria-label="Indicadores gerais"
+                className="rounded-[10px] border border-[#DCE1EB] bg-white shadow-card overflow-hidden grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 divide-y md:divide-y-0 md:divide-x divide-[#DCE1EB]"
+              >
+                <div className="px-4 py-4">
+                  <p className="text-xs font-semibold text-[#4B5568]">Turmas</p>
+                  <p className="mt-1 font-display text-2xl font-bold text-[#131B2E] tabular-nums">
+                    {kpis.total_classrooms}
+                  </p>
+                </div>
+
+                <div className="px-4 py-4">
+                  <p className="text-xs font-semibold text-[#4B5568]">Alunos</p>
+                  <p className="mt-1 font-display text-2xl font-bold text-[#131B2E] tabular-nums">
+                    {kpis.total_students}
+                  </p>
+                </div>
+
+                <div className="px-4 py-4">
+                  <p className="text-xs font-semibold text-[#4B5568]">Listas publicadas</p>
+                  <p className="mt-1 font-display text-2xl font-bold text-[#131B2E] tabular-nums">
+                    {kpis.total_published_lists}
+                  </p>
+                </div>
+
+                <div className="px-4 py-4">
+                  <p className="text-xs font-semibold text-[#4B5568]">Submissões</p>
+                  <p className="mt-1 font-display text-2xl font-bold text-[#131B2E] tabular-nums">
+                    {kpis.total_submissions}
+                  </p>
+                </div>
+
+                <div className="px-4 py-4">
+                  <p className="text-xs font-semibold text-[#4B5568]">Média geral</p>
+                  <p className="mt-1 font-display text-2xl font-bold text-[#1B4FD8] tabular-nums">
+                    {formatPercent(kpis.overall_accuracy_percentage, 1)}
+                  </p>
+                </div>
+
+                <div
+                  className={clsx(
+                    'px-4 py-4',
+                    kpis.pending_retake_requests > 0 ? 'bg-[#FFFBEB]' : 'bg-white'
+                  )}
+                >
+                  <p className="text-xs font-semibold text-[#4B5568]">Retakes pendentes</p>
+                  <p
+                    className={clsx(
+                      'mt-1 font-display text-2xl font-bold tabular-nums',
+                      kpis.pending_retake_requests > 0 ? 'text-[#92400E]' : 'text-[#131B2E]'
+                    )}
+                  >
+                    {kpis.pending_retake_requests}
+                  </p>
+                </div>
+              </section>
+            )}
+
+            {/* Analytics Filter Controls */}
+            <Card padding="sm">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                <div>
+                  <label
+                    htmlFor="analytics-classroom"
+                    className="block text-xs font-bold text-[#131B2E] mb-1.5"
+                  >
+                    Turma
+                  </label>
+                  <select
+                    id="analytics-classroom"
+                    value={selectedClassroomId}
+                    onChange={(e) => handleClassroomFilterChange(e.target.value)}
+                    className="block min-h-[44px] w-full rounded-lg border border-[#CBD3E1] bg-white px-3 py-2 text-base sm:text-sm text-[#131B2E] focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
+                  >
+                    <option value="">Todas as turmas</option>
+                    {classrooms.map((c) => (
+                      <option key={String(c.id)} value={String(c.id)}>
+                        {c.name} ({c.student_count} alunos)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="analytics-list"
+                    className="block text-xs font-bold text-[#131B2E] mb-1.5"
+                  >
+                    Simulado / Lista
+                  </label>
+                  <select
+                    id="analytics-list"
+                    value={selectedListId}
+                    onChange={(e) => handleListFilterChange(e.target.value)}
+                    className="block min-h-[44px] w-full rounded-lg border border-[#CBD3E1] bg-white px-3 py-2 text-base sm:text-sm text-[#131B2E] focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
+                  >
+                    <option value="">Todas as listas</option>
+                    {visibleLists.map((l) => (
+                      <option key={String(l.id)} value={String(l.id)}>
+                        {l.title} ({l.classroom_name})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <span className="block text-xs font-bold text-[#131B2E] mb-1.5">
+                    Escopo das tentativas
+                  </span>
+                  <div
+                    role="group"
+                    aria-label="Escopo das tentativas"
+                    className="grid grid-cols-2 rounded-lg border border-[#CBD3E1] bg-[#EEF1F7] p-1"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleScopeChange('latest')}
+                      className={clsx(
+                        'min-h-[44px] sm:min-h-[36px] rounded-md px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer',
+                        scope === 'latest'
+                          ? 'bg-white text-[#131B2E] shadow-card'
+                          : 'text-[#4B5568] hover:text-[#131B2E]'
+                      )}
+                    >
+                      Última tentativa
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleScopeChange('all')}
+                      className={clsx(
+                        'min-h-[44px] sm:min-h-[36px] rounded-md px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer',
+                        scope === 'all'
+                          ? 'bg-white text-[#131B2E] shadow-card'
+                          : 'text-[#4B5568] hover:text-[#131B2E]'
+                      )}
+                    >
+                      Todas as tentativas
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            {/* Main Topic Chart + Lowest/Highest Ledger */}
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
+              <Card className="xl:col-span-2">
+                <CardHeader
+                  title="Rendimento por Assunto de Matemática"
+                  description="Assuntos ordenados do menor para o maior índice de acerto (%)."
+                />
+                <div className="mt-5">
+                  {loadingAnalytics ? (
+                    <LoadingState label="Atualizando gráfico de assuntos..." variant="table" rows={4} />
+                  ) : (
+                    <TopicPerformanceChart
+                      topics={analytics?.topics ?? []}
+                      sortOrder="asc"
+                      emptyMessage="Nenhuma entrega registrada para os filtros selecionados."
+                    />
+                  )}
+                </div>
+              </Card>
+
+              <div className="space-y-4">
+                {/* Lowest performing topics */}
+                <Card padding="none" className="overflow-hidden">
+                  <div className="px-5 py-4 border-b border-[#DCE1EB] bg-[#FFF1F2]/60 flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 text-[#BE123C] shrink-0" aria-hidden="true" />
+                    <div>
+                      <h2 className="font-display text-sm font-bold text-[#131B2E]">
+                        Assuntos com Menor Rendimento
+                      </h2>
+                      <p className="text-xs text-[#4B5568]">Prioridade para reforço em sala</p>
+                    </div>
+                  </div>
+
+                  {!analytics || analytics.lowest_performing_topics.length === 0 ? (
+                    <p className="px-5 py-4 text-sm text-[#4B5568]">
+                      Sem dados suficientes para destacar assuntos críticos.
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-[#DCE1EB]">
+                      {analytics.lowest_performing_topics.map((topic) => {
+                        const meta = getPerformanceTierMeta(topic.accuracy_percentage);
+                        return (
+                          <div
+                            key={String(topic.topic_id)}
+                            className="flex items-center justify-between gap-3 px-5 py-3"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-bold text-[#131B2E]">
+                                {topic.topic_name}
+                              </p>
+                              <p className="text-xs text-[#4B5568] tabular-nums">
+                                {topic.correct_answers} de {topic.total_answers} acertos
+                              </p>
+                            </div>
+                            <Badge tone={meta.badgeTone} className="font-mono">
+                              {formatPercent(topic.accuracy_percentage, 1)}
+                            </Badge>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </Card>
+
+                {/* Highest performing topics */}
+                <Card padding="none" className="overflow-hidden">
+                  <div className="px-5 py-4 border-b border-[#DCE1EB] bg-[#ECFDF5]/60 flex items-center gap-2">
+                    <Award className="h-4 w-4 text-[#0F766E] shrink-0" aria-hidden="true" />
+                    <div>
+                      <h2 className="font-display text-sm font-bold text-[#131B2E]">
+                        Assuntos com Maior Rendimento
+                      </h2>
+                      <p className="text-xs text-[#4B5568]">Conteúdos com melhor consolidação</p>
+                    </div>
+                  </div>
+
+                  {!analytics || analytics.highest_performing_topics.length === 0 ? (
+                    <p className="px-5 py-4 text-sm text-[#4B5568]">
+                      Sem dados suficientes para listar destaques.
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-[#DCE1EB]">
+                      {analytics.highest_performing_topics.map((topic) => {
+                        const meta = getPerformanceTierMeta(topic.accuracy_percentage);
+                        return (
+                          <div
+                            key={String(topic.topic_id)}
+                            className="flex items-center justify-between gap-3 px-5 py-3"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-bold text-[#131B2E]">
+                                {topic.topic_name}
+                              </p>
+                              <p className="text-xs text-[#4B5568] tabular-nums">
+                                {topic.correct_answers} de {topic.total_answers} acertos
+                              </p>
+                            </div>
+                            <Badge tone={meta.badgeTone} className="font-mono">
+                              {formatPercent(topic.accuracy_percentage, 1)}
+                            </Badge>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </Card>
+              </div>
+            </div>
+
+            {/* Pending Retake Requests Queue */}
+            <Card>
+              <CardHeader
+                title={`Solicitações de Nova Tentativa (${retakeRequests.length})`}
+                description="Alunos que concluíram um simulado e solicitaram autorização para refazer."
+                actions={
+                  retakeRequests.length > 0 ? (
+                    <Badge tone="warning">
+                      <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+                      {retakeRequests.length} pendente(s)
+                    </Badge>
+                  ) : undefined
+                }
+              />
+
+              <div className="mt-5">
+                {retakeRequests.length === 0 ? (
+                  <EmptyState
+                    icon={<Check className="h-6 w-6" />}
+                    title="Nenhuma solicitação pendente"
+                    description="Quando um aluno pedir permissão para refazer um simulado, a solicitação aparecerá aqui para aprovação ou recusa."
+                  />
+                ) : (
+                  <div className="divide-y divide-[#DCE1EB] border border-[#DCE1EB] rounded-lg overflow-hidden">
+                    {retakeRequests.map((req) => {
+                      const isProcessing = decidingId === req.id;
+                      return (
+                        <div
+                          key={String(req.id)}
+                          className="p-4 bg-white flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                        >
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Link
+                                to={`/teacher/students/${req.student_id}`}
+                                className="text-sm font-bold text-[#1B4FD8] hover:underline"
+                              >
+                                {req.student_name}
+                              </Link>
+                              <span className="font-mono text-xs text-[#4B5568]">
+                                {req.student_email}
+                              </span>
+                              <Badge tone="navy">{req.classroom_name}</Badge>
+                            </div>
+
+                            <p className="text-sm font-semibold text-[#131B2E]">
+                              Simulado: {req.question_list_title}
+                            </p>
+
+                            <div className="flex flex-wrap items-center gap-3 text-xs text-[#4B5568] tabular-nums">
+                              <span>
+                                Tentativas usadas:{' '}
+                                <strong className="font-mono text-[#131B2E]">
+                                  {req.attempts_used}
+                                </strong>
+                              </span>
+                              {req.last_score_percentage !== null && (
+                                <span>
+                                  Última nota:{' '}
+                                  <strong className="font-mono text-[#131B2E]">
+                                    {formatPercent(req.last_score_percentage)}
+                                  </strong>
+                                </span>
+                              )}
+                              <span>Solicitado em {formatDateTime(req.created_at)}</span>
+                            </div>
+
+                            {req.request_reason ? (
+                              <p className="mt-1.5 rounded-lg bg-[#F8F8F5] border border-[#DCE1EB] px-3 py-2 text-xs text-[#334155]">
+                                <span className="font-semibold">Motivo:</span> {req.request_reason}
+                              </p>
+                            ) : null}
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            <Button
+                              variant="success"
+                              size="sm"
+                              isLoading={isProcessing}
+                              disabled={decidingId !== null && !isProcessing}
+                              leftIcon={<Check className="h-3.5 w-3.5" />}
+                              onClick={() => void handleDecideRetake(req.id, 'approved')}
+                            >
+                              Autorizar Nova Tentativa
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={decidingId !== null}
+                              leftIcon={<X className="h-3.5 w-3.5" />}
+                              onClick={() => void handleDecideRetake(req.id, 'rejected')}
+                            >
+                              Recusar
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </Card>
+          </>
+        )}
+      </div>
+    </AppShell>
+  );
+}

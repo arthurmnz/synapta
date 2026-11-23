@@ -1,0 +1,101 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --paper-canvas: #F8F8F5;
+    --paper-sheet: #FFFFFF;
+    --ink-graphite: #131B2E;
+    --ink-slate: #4B5568;
+    --compass-cobalt: #1B4FD8;
+    --grid-hairline: #DCE1EB;
+  }
+
+  html {
+    font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+      sans-serif;
+    color: var(--ink-graphite);
+    background-color: var(--paper-canvas);
+    scroll-behavior: smooth;
+    scroll-padding-top: 5rem;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: 'Space Grotesk', 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+  }
+
+  ::selection {
+    background-color: #DCE7FE;
+    color: #131B2E;
+  }
+
+  input,
+  textarea,
+  select {
+    caret-color: #1B4FD8;
+  }
+
+  a {
+    text-underline-offset: 3px;
+  }
+
+  *:focus-visible {
+    outline: 2px solid #1B4FD8;
+    outline-offset: 2px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #EEF1F7;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #C4CCDC;
+    border-radius: 6px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #9AA5BC;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer utilities {
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Subtle Cartesian drafting grid for paper headers and math sheets */
+  .bg-math-grid {
+    background-color: #FFFFFF;
+    background-image:
+      linear-gradient(to right, rgba(220, 225, 235, 0.55) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(220, 225, 235, 0.55) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  /* Drafting table dark blueprint grid for auth authority panel */
+  .bg-math-grid-dark {
+    background-color: #131B2E;
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.055) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+}
