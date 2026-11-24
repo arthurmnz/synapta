@@ -115,9 +115,9 @@ def register_and_login(
 
 
 def create_topic(client: TestClient, teacher_headers: dict[str, str], name: str) -> dict:
-    """Create a mathematics topic via teacher endpoint."""
+    """Create a multidisciplinary subject/topic via teacher endpoint."""
     resp = client.post(
-        "/api/v1/teacher/topics",
+        "/api/v1/topics",
         headers=teacher_headers,
         json={"name": name, "description": f"Descrição de {name}"},
     )
@@ -125,12 +125,54 @@ def create_topic(client: TestClient, teacher_headers: dict[str, str], name: str)
     return resp.json()
 
 
-def create_classroom(client: TestClient, teacher_headers: dict[str, str], name: str) -> dict:
+def create_organization(
+    client: TestClient,
+    teacher_headers: dict[str, str],
+    name: str,
+    *,
+    visibility: str = "public",
+    access_code: str | None = None,
+) -> dict:
+    """Create an organization via teacher endpoint."""
+    payload: dict = {
+        "name": name,
+        "description": f"Organização {name}",
+        "visibility": visibility,
+    }
+    if access_code is not None:
+        payload["access_code"] = access_code
+    resp = client.post(
+        "/api/v1/teacher/organizations",
+        headers=teacher_headers,
+        json=payload,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+def create_classroom(
+    client: TestClient,
+    teacher_headers: dict[str, str],
+    name: str,
+    *,
+    organization_id: str | None = None,
+    visibility: str = "public",
+    access_code: str | None = None,
+) -> dict:
     """Create a classroom via teacher endpoint."""
+    payload: dict = {
+        "name": name,
+        "description": f"Turma {name}",
+        "visibility": visibility,
+    }
+    if organization_id is not None:
+        payload["organization_id"] = organization_id
+    if access_code is not None:
+        payload["access_code"] = access_code
     resp = client.post(
         "/api/v1/teacher/classrooms",
         headers=teacher_headers,
-        json={"name": name, "description": f"Turma {name}"},
+        json=payload,
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
@@ -140,16 +182,30 @@ def create_list_with_questions(
     client: TestClient,
     teacher_headers: dict[str, str],
     *,
-    classroom_id: str,
+    classroom_id: str | None = None,
+    is_standalone: bool = False,
+    visibility: str = "public",
+    access_code: str | None = None,
     title: str,
     questions_spec: list[dict],
     publish: bool = True,
 ) -> dict:
     """Create a list, add questions, optionally publish it, and return list detail."""
+    payload: dict = {
+        "is_standalone": is_standalone,
+        "title": title,
+        "description": "Descrição da lista",
+        "visibility": visibility,
+    }
+    if classroom_id is not None:
+        payload["classroom_id"] = classroom_id
+    if access_code is not None:
+        payload["access_code"] = access_code
+
     list_resp = client.post(
         "/api/v1/teacher/lists",
         headers=teacher_headers,
-        json={"classroom_id": classroom_id, "title": title, "description": "Descrição da lista"},
+        json=payload,
     )
     assert list_resp.status_code == 201, list_resp.text
     list_id = list_resp.json()["id"]

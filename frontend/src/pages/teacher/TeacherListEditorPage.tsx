@@ -2,10 +2,14 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
+  BookOpen,
   CheckCircle2,
   Edit3,
   Eye,
   EyeOff,
+  Globe,
+  Layers,
+  Lock,
   Plus,
   RefreshCw,
   Save,
@@ -21,19 +25,26 @@ import {
   EmptyState,
   LoadingState,
 } from '../../components/ui';
+import {
+  AccessCodeDisplay,
+  ListContextBadges,
+  VisibilityBadge,
+} from '../../components/shared/AccessBadges';
 import { AppShell } from '../../components/layout/AppShell';
 import { apiClient, ApiError } from '../../lib/apiClient';
 import type {
   EntityId,
   OptionKey,
   QuestionOptions,
+  TeacherClassroomOut,
   TeacherListDetailOut,
+  TeacherListUpdatePayload,
   TeacherQuestionOut,
   TopicOut,
+  VisibilityType,
 } from '../../types/api';
 
 const OPTION_KEYS: OptionKey[] = ['A', 'B', 'C', 'D'];
-
 const EMPTY_OPTIONS: QuestionOptions = { A: '', B: '', C: '', D: '' };
 
 export function TeacherListEditorPage() {
@@ -41,13 +52,18 @@ export function TeacherListEditorPage() {
 
   const [detail, setDetail] = useState<TeacherListDetailOut | null>(null);
   const [topics, setTopics] = useState<TopicOut[]>([]);
+  const [classrooms, setClassrooms] = useState<TeacherClassroomOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  // List metadata form
+  // List metadata & hierarchy form
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [classroomId, setClassroomId] = useState('');
+  const [visibility, setVisibility] = useState<VisibilityType>('public');
+  const [accessCode, setAccessCode] = useState('');
   const [savingMeta, setSavingMeta] = useState(false);
   const [togglingPublish, setTogglingPublish] = useState(false);
 
@@ -67,19 +83,35 @@ export function TeacherListEditorPage() {
   const [savingQuestion, setSavingQuestion] = useState(false);
   const [deletingQuestionId, setDeletingQuestionId] = useState<EntityId | null>(null);
 
+  const syncFormWithDetail = (listData: TeacherListDetailOut, clsList: TeacherClassroomOut[]) => {
+    setTitle(listData.title);
+    setDescription(listData.description || '');
+    setIsStandalone(Boolean(listData.is_standalone));
+    setClassroomId(
+      listData.classroom_id
+        ? String(listData.classroom_id)
+        : clsList[0]
+          ? String(clsList[0].id)
+          : ''
+    );
+    setVisibility(listData.visibility ?? 'public');
+    setAccessCode(listData.access_code || '');
+  };
+
   const loadListAndTopics = useCallback(async () => {
     if (!listId) return;
     setLoading(true);
     setError(null);
     try {
-      const [listData, topicList] = await Promise.all([
+      const [listData, topicList, teacherClassrooms] = await Promise.all([
         apiClient.getTeacherListDetail(listId),
         apiClient.getTopics(),
+        apiClient.getTeacherClassrooms().catch(() => [] as TeacherClassroomOut[]),
       ]);
       setDetail(listData);
-      setTitle(listData.title);
-      setDescription(listData.description || '');
       setTopics(topicList);
+      setClassrooms(teacherClassrooms);
+      syncFormWithDetail(listData, teacherClassrooms);
       if (topicList.length > 0) {
         setSelectedTopicId((prev) => prev || String(topicList[0].id));
       }
@@ -87,7 +119,7 @@ export function TeacherListEditorPage() {
       setError(
         err instanceof ApiError
           ? err.message
-          : 'Não foi possível carregar os detalhes desta lista.'
+          : 'Não foi possível carregar os detalhes deste simulado.'
       );
     } finally {
       setLoading(false);
@@ -105,23 +137,57 @@ export function TeacherListEditorPage() {
 
   const handleSaveMetadata = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!listId || !title.trim()) {
-      setError('O título da lista não pode ficar em branco.');
-      return;
-    }
-    setSavingMeta(true);
+    if (!listId || !detail) return;
     setError(null);
     setFeedback(null);
+
+    if (!title.trim()) {
+      setError('O título do simulado não pode ficar em branco.');
+      return;
+    }
+
+    if (!isStandalone) {
+      if (!detail.has_submissions && !classroomId) {
+        setError('Selecione uma turma para o simulado ou marque como Simulado Avulso.');
+        return;
+      }
+      const trimmedCode = accessCode.trim();
+      if (visibility === 'private' && (trimmedCode.length < 4 || trimmedCode.length > 64)) {
+        setError('Simulados privados exigem um código de acesso entre 4 e 64 caracteres.');
+        return;
+      }
+    }
+
+    setSavingMeta(true);
     try {
-      const updated = await apiClient.updateList(listId, {
+      const payload: TeacherListUpdatePayload = {
         title: title.trim(),
         description: description.trim() || null,
-      });
+      };
+
+      if (!detail.has_submissions) {
+        payload.is_standalone = isStandalone;
+        if (!isStandalone) {
+          const matchedClassroom = classrooms.find((c) => String(c.id) === classroomId);
+          payload.classroom_id = matchedClassroom ? matchedClassroom.id : classroomId;
+        }
+      }
+
+      if (isStandalone) {
+        payload.visibility = 'public';
+        payload.access_code = null;
+      } else {
+        payload.visibility = visibility;
+        payload.access_code = visibility === 'private' ? accessCode.trim() : null;
+      }
+
+      const updated = await apiClient.updateList(listId, payload);
       setDetail(updated);
-      setFeedback('Informações da lista atualizadas.');
+      syncFormWithDetail(updated, classrooms);
+      setFeedback('Configurações do simulado atualizadas.');
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.message : 'Não foi possível atualizar a lista.'
+        err instanceof ApiError ? err.message : 'Não foi possível atualizar o simulado.'
       );
     } finally {
       setSavingMeta(false);
@@ -140,8 +206,10 @@ export function TeacherListEditorPage() {
       setDetail(updated);
       setFeedback(
         updated.is_published
-          ? 'Lista publicada! Os alunos da turma já podem acessá-la.'
-          : 'Lista movida para rascunho.'
+          ? updated.is_standalone
+            ? 'Simulado Avulso publicado! Qualquer aluno já pode acessá-lo.'
+            : 'Simulado publicado! Os alunos da turma já podem acessá-lo.'
+          : 'Simulado movido para rascunho.'
       );
     } catch (err) {
       setError(
@@ -157,7 +225,7 @@ export function TeacherListEditorPage() {
   const handleCreateTopic = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTopicName.trim()) {
-      setError('Informe o nome do novo assunto de Matemática.');
+      setError('Informe o nome do novo assunto ou matéria.');
       return;
     }
     setSavingTopic(true);
@@ -173,7 +241,7 @@ export function TeacherListEditorPage() {
       setNewTopicName('');
       setNewTopicDesc('');
       setShowNewTopic(false);
-      setFeedback(`Assunto "${created.name}" adicionado ao catálogo.`);
+      setFeedback(`Assunto "${created.name}" adicionado ao catálogo multidisciplinar.`);
     } catch (err) {
       setError(
         err instanceof ApiError ? err.message : 'Não foi possível criar o assunto.'
@@ -220,7 +288,7 @@ export function TeacherListEditorPage() {
 
     const topicObj = topics.find((t) => String(t.id) === selectedTopicId);
     if (!detail.has_submissions && !topicObj) {
-      setError('Selecione um assunto de Matemática para a questão.');
+      setError('Selecione um assunto ou matéria para a questão.');
       return;
     }
     if (!statement.trim()) {
@@ -271,7 +339,7 @@ export function TeacherListEditorPage() {
           correct_option: correctOption,
           explanation: explanation.trim(),
         });
-        setFeedback('Nova questão adicionada à lista.');
+        setFeedback('Nova questão adicionada ao simulado.');
       }
 
       resetQuestionForm();
@@ -314,7 +382,7 @@ export function TeacherListEditorPage() {
             className="inline-flex min-h-[44px] items-center gap-2 text-sm font-semibold text-[#4B5568] hover:text-[#131B2E]"
           >
             <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-            Voltar para Turmas e Listas
+            Voltar para Turmas e Simulados
           </Link>
         </div>
 
@@ -339,22 +407,37 @@ export function TeacherListEditorPage() {
         {feedback && <Alert tone="success">{feedback}</Alert>}
 
         {loading ? (
-          <LoadingState label="Carregando editor de lista..." variant="detail" />
+          <LoadingState label="Carregando editor de simulado..." variant="detail" />
         ) : !detail ? null : (
           <>
             {/* Metadata & Publish Controls */}
             <Card>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone="navy">{detail.classroom_name}</Badge>
-                  {detail.is_published ? (
-                    <Badge tone="success">Publicada para alunos</Badge>
-                  ) : (
-                    <Badge tone="warning">Rascunho (oculta)</Badge>
-                  )}
-                  <span className="font-mono text-xs font-semibold text-[#4B5568] tabular-nums">
-                    {detail.question_count} questões · {detail.submission_count} entregas
-                  </span>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#DCE1EB] pb-4">
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <ListContextBadges
+                      isStandalone={detail.is_standalone}
+                      classroomName={detail.classroom_name}
+                      organizationName={detail.organization_name}
+                    />
+                    <VisibilityBadge visibility={detail.visibility} entity="masculine" />
+                    {detail.is_published ? (
+                      <Badge tone="success">Publicado para alunos</Badge>
+                    ) : (
+                      <Badge tone="warning">Rascunho (oculto)</Badge>
+                    )}
+                    <span className="font-mono text-xs font-semibold text-[#4B5568] tabular-nums">
+                      {detail.question_count} questões · {detail.submission_count} entregas
+                    </span>
+                  </div>
+
+                  {!detail.is_standalone &&
+                  detail.visibility === 'private' &&
+                  detail.access_code ? (
+                    <div>
+                      <AccessCodeDisplay code={detail.access_code} />
+                    </div>
+                  ) : null}
                 </div>
 
                 <Button
@@ -375,9 +458,10 @@ export function TeacherListEditorPage() {
 
               {detail.has_submissions && (
                 <Alert tone="warning" className="mt-4">
-                  A estrutura desta lista está congelada pois já existem entregas registradas (
-                  {detail.submission_count}). Não é possível adicionar ou remover questões; apenas
-                  editar o enunciado e a resolução comentada das questões existentes.
+                  A estrutura e classificação deste simulado estão congeladas pois já existem
+                  entregas registradas ({detail.submission_count}). Não é possível alterar a turma
+                  ou adicionar/remover questões; você ainda pode editar título, descrição,
+                  visibilidade e corrigir enunciados ou resoluções.
                 </Alert>
               )}
 
@@ -385,7 +469,7 @@ export function TeacherListEditorPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label htmlFor="list-title" className="block text-sm font-semibold text-[#131B2E]">
-                      Título da lista
+                      Título do simulado
                     </label>
                     <input
                       id="list-title"
@@ -409,6 +493,164 @@ export function TeacherListEditorPage() {
                     />
                   </div>
                 </div>
+
+                {/* Classification & Visibility Controls */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                  <div>
+                    <span className="block text-sm font-semibold text-[#131B2E] mb-1.5">
+                      Classificação
+                    </span>
+                    <div
+                      className="grid grid-cols-2 gap-2.5"
+                      role="radiogroup"
+                      aria-label="Classificação do simulado"
+                    >
+                      <button
+                        type="button"
+                        role="radio"
+                        disabled={detail.has_submissions}
+                        aria-checked={!isStandalone}
+                        onClick={() => setIsStandalone(false)}
+                        className={clsx(
+                          'min-h-[44px] flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs sm:text-sm font-semibold transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed',
+                          !isStandalone
+                            ? 'border-[#1B4FD8] bg-[#EEF3FF] text-[#1640B0] ring-1 ring-[#1B4FD8]'
+                            : 'border-[#DCE1EB] bg-white text-[#4B5568]'
+                        )}
+                      >
+                        <BookOpen className="h-4 w-4" aria-hidden="true" />
+                        De Turma
+                      </button>
+                      <button
+                        type="button"
+                        role="radio"
+                        disabled={detail.has_submissions}
+                        aria-checked={isStandalone}
+                        onClick={() => {
+                          setIsStandalone(true);
+                          setVisibility('public');
+                        }}
+                        className={clsx(
+                          'min-h-[44px] flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs sm:text-sm font-semibold transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed',
+                          isStandalone
+                            ? 'border-[#1B4FD8] bg-[#EEF3FF] text-[#1640B0] ring-1 ring-[#1B4FD8]'
+                            : 'border-[#DCE1EB] bg-white text-[#4B5568]'
+                        )}
+                      >
+                        <Layers className="h-4 w-4" aria-hidden="true" />
+                        Simulado Avulso
+                      </button>
+                    </div>
+                  </div>
+
+                  {!isStandalone ? (
+                    <div>
+                      <label
+                        htmlFor="edit-list-classroom"
+                        className="block text-sm font-semibold text-[#131B2E]"
+                      >
+                        Turma vinculada
+                      </label>
+                      <select
+                        id="edit-list-classroom"
+                        value={classroomId}
+                        disabled={detail.has_submissions}
+                        onChange={(e) => setClassroomId(e.target.value)}
+                        className="mt-1.5 block min-h-[44px] w-full rounded-lg border border-[#CBD3E1] bg-white px-3.5 py-2 text-base sm:text-sm text-[#131B2E] disabled:bg-[#F8F8F5] disabled:text-[#4B5568] focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
+                      >
+                        {classrooms.length === 0 && detail.classroom_name ? (
+                          <option value={String(detail.classroom_id ?? '')}>
+                            {detail.classroom_name}
+                          </option>
+                        ) : (
+                          classrooms.map((c) => (
+                            <option key={String(c.id)} value={String(c.id)}>
+                              {c.name}
+                              {c.organization_name ? ` (${c.organization_name})` : ''}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-[#C7D7FE] bg-[#EEF3FF] px-3.5 py-2.5 text-xs text-[#1640B0] flex items-center gap-2">
+                      <Globe className="h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span>
+                        Simulados Avulsos são sempre públicos e acessíveis a qualquer aluno após
+                        publicação.
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {!isStandalone && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                    <div>
+                      <span className="block text-sm font-semibold text-[#131B2E] mb-1.5">
+                        Visibilidade na turma
+                      </span>
+                      <div
+                        className="grid grid-cols-2 gap-2.5"
+                        role="radiogroup"
+                        aria-label="Visibilidade do simulado"
+                      >
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={visibility === 'public'}
+                          onClick={() => setVisibility('public')}
+                          className={clsx(
+                            'min-h-[44px] flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors cursor-pointer',
+                            visibility === 'public'
+                              ? 'border-[#1B4FD8] bg-[#EEF3FF] text-[#1640B0] ring-1 ring-[#1B4FD8]'
+                              : 'border-[#DCE1EB] bg-white text-[#4B5568]'
+                          )}
+                        >
+                          <Globe className="h-4 w-4" aria-hidden="true" />
+                          Público
+                        </button>
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={visibility === 'private'}
+                          onClick={() => setVisibility('private')}
+                          className={clsx(
+                            'min-h-[44px] flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors cursor-pointer',
+                            visibility === 'private'
+                              ? 'border-[#1B4FD8] bg-[#EEF3FF] text-[#1640B0] ring-1 ring-[#1B4FD8]'
+                              : 'border-[#DCE1EB] bg-white text-[#4B5568]'
+                          )}
+                        >
+                          <Lock className="h-4 w-4" aria-hidden="true" />
+                          Privado
+                        </button>
+                      </div>
+                    </div>
+
+                    {visibility === 'private' && (
+                      <div>
+                        <label
+                          htmlFor="edit-list-access-code"
+                          className="block text-sm font-semibold text-[#131B2E]"
+                        >
+                          Código de acesso do simulado
+                        </label>
+                        <input
+                          id="edit-list-access-code"
+                          type="text"
+                          required
+                          minLength={4}
+                          maxLength={64}
+                          value={accessCode}
+                          onChange={(e) => setAccessCode(e.target.value)}
+                          placeholder="Ex.: DESAFIO26"
+                          className="mt-1.5 block min-h-[44px] w-full rounded-lg border border-[#CBD3E1] bg-white px-3.5 py-2 font-mono text-base sm:text-sm tracking-wider text-[#131B2E] focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <Button
                   type="submit"
                   variant="secondary"
@@ -433,7 +675,7 @@ export function TeacherListEditorPage() {
                   description={
                     detail.has_submissions
                       ? 'Lista com entregas: apenas enunciado e resolução comentada das questões existentes podem ser editados.'
-                      : 'Vincule o assunto de Matemática, informe as quatro alternativas e escreva a resolução comentada.'
+                      : 'Vincule o assunto ou matéria de qualquer disciplina, informe as quatro alternativas e escreva a resolução comentada.'
                   }
                   actions={
                     <Button
@@ -443,7 +685,7 @@ export function TeacherListEditorPage() {
                       leftIcon={<Plus className="h-3.5 w-3.5" />}
                       onClick={() => setShowNewTopic((prev) => !prev)}
                     >
-                      Novo Assunto
+                      Novo Assunto / Matéria
                     </Button>
                   }
                 />
@@ -469,15 +711,17 @@ export function TeacherListEditorPage() {
                   onSubmit={handleCreateTopic}
                   className="mt-4 rounded-xl border border-blue-200 bg-blue-50/50 p-4 space-y-3"
                 >
-                  <p className="text-sm font-bold text-slate-900">Cadastrar Novo Assunto de Matemática</p>
+                  <p className="text-sm font-bold text-[#131B2E]">
+                    Cadastrar Novo Assunto ou Matéria
+                  </p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <input
                       type="text"
                       value={newTopicName}
                       onChange={(e) => setNewTopicName(e.target.value)}
-                      placeholder="Nome (ex.: Trigonometria Básica)"
-                      aria-label="Nome do novo assunto"
-                      className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-base sm:text-sm text-slate-900"
+                      placeholder="Nome (ex.: Química Orgânica, História Contemporânea)"
+                      aria-label="Nome do novo assunto ou matéria"
+                      className="block min-h-[44px] w-full rounded-lg border border-[#CBD3E1] bg-white px-3 py-2 text-base sm:text-sm text-[#131B2E]"
                     />
                     <input
                       type="text"
@@ -485,7 +729,7 @@ export function TeacherListEditorPage() {
                       onChange={(e) => setNewTopicDesc(e.target.value)}
                       placeholder="Descrição curta (opcional)"
                       aria-label="Descrição do novo assunto"
-                      className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-base sm:text-sm text-slate-900"
+                      className="block min-h-[44px] w-full rounded-lg border border-[#CBD3E1] bg-white px-3 py-2 text-base sm:text-sm text-[#131B2E]"
                     />
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -507,12 +751,23 @@ export function TeacherListEditorPage() {
               <form onSubmit={handleSaveQuestion} className="mt-5 space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label
-                      htmlFor="question-topic"
-                      className="block text-sm font-semibold text-[#131B2E]"
-                    >
-                      Assunto de Matemática
-                    </label>
+                    <div className="flex items-center justify-between gap-2">
+                      <label
+                        htmlFor="question-topic"
+                        className="block text-sm font-semibold text-[#131B2E]"
+                      >
+                        Assunto / Matéria
+                      </label>
+                      {!detail.has_submissions && (
+                        <button
+                          type="button"
+                          onClick={() => setShowNewTopic((prev) => !prev)}
+                          className="text-xs font-semibold text-[#1B4FD8] hover:underline cursor-pointer"
+                        >
+                          {showNewTopic ? 'Fechar cadastro' : '+ Criar novo assunto'}
+                        </button>
+                      )}
+                    </div>
                     <select
                       id="question-topic"
                       value={selectedTopicId}
@@ -569,7 +824,7 @@ export function TeacherListEditorPage() {
                     disabled={detail.has_submissions && !editingQuestionId}
                     value={statement}
                     onChange={(e) => setStatement(e.target.value)}
-                    placeholder="Ex.: Resolva a equação 2x + 6 = 14 e assinale o valor de x."
+                    placeholder="Ex.: Qual organela celular é responsável pela respiração celular aeróbica?"
                     className="mt-1.5 block w-full rounded-lg border border-[#CBD3E1] bg-white px-3.5 py-2.5 text-base sm:text-sm text-[#131B2E] placeholder:text-slate-400 disabled:bg-[#F8F8F5] disabled:text-[#4B5568] disabled:cursor-not-allowed focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
                   />
                 </div>
@@ -610,7 +865,7 @@ export function TeacherListEditorPage() {
                 <div>
                   <label
                     htmlFor="question-explanation"
-                    className="block text-sm font-semibold text-slate-800"
+                    className="block text-sm font-semibold text-[#131B2E]"
                   >
                     Resolução comentada (exibida ao aluno após a entrega)
                   </label>
@@ -621,8 +876,8 @@ export function TeacherListEditorPage() {
                     disabled={detail.has_submissions && !editingQuestionId}
                     value={explanation}
                     onChange={(e) => setExplanation(e.target.value)}
-                    placeholder="Ex.: Subtraindo 6 dos dois lados temos 2x = 8, portanto x = 4."
-                    className="mt-1.5 block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-base sm:text-sm text-slate-900 placeholder:text-slate-400 disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
+                    placeholder="Ex.: As mitocôndrias realizam o ciclo de Krebs e a cadeia respiratória para produzir ATP."
+                    className="mt-1.5 block w-full rounded-lg border border-[#CBD3E1] bg-white px-3.5 py-2 text-base sm:text-sm text-[#131B2E] placeholder:text-slate-400 disabled:bg-[#F8F8F5] disabled:text-[#4B5568] disabled:cursor-not-allowed focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
                   />
                 </div>
 
@@ -653,8 +908,8 @@ export function TeacherListEditorPage() {
 
             {/* Questions List */}
             <section aria-labelledby="questions-preview-heading" className="space-y-4">
-              <h2 id="questions-preview-heading" className="text-lg font-bold text-slate-900">
-                Questões da Lista ({sortedQuestions.length})
+              <h2 id="questions-preview-heading" className="font-display text-lg font-bold text-[#131B2E]">
+                Questões do Simulado ({sortedQuestions.length})
               </h2>
 
               {sortedQuestions.length === 0 ? (
@@ -669,7 +924,7 @@ export function TeacherListEditorPage() {
                     <Card key={String(q.id)} className="space-y-4">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-xs font-bold text-slate-500 tabular-nums">
+                          <span className="text-xs font-bold text-[#4B5568] tabular-nums">
                             Questão {index + 1}
                           </span>
                           <Badge tone="primary">{q.topic_name}</Badge>
@@ -701,12 +956,12 @@ export function TeacherListEditorPage() {
                             aria-label={`Excluir questão ${index + 1}`}
                             onClick={() => void handleDeleteQuestion(q.id)}
                           >
-                            <Trash2 className="h-4 w-4 text-rose-700" />
+                            <Trash2 className="h-4 w-4 text-rose-700" aria-hidden="true" />
                           </Button>
                         </div>
                       </div>
 
-                      <p className="text-base font-semibold text-slate-900 whitespace-pre-line max-w-[75ch]">
+                      <p className="text-base font-semibold text-[#131B2E] whitespace-pre-line max-w-[75ch]">
                         {q.statement}
                       </p>
 
@@ -720,15 +975,15 @@ export function TeacherListEditorPage() {
                                 'flex items-start gap-2 rounded-lg border px-3 py-2 text-sm',
                                 isCorrect
                                   ? 'border-emerald-300 bg-emerald-50/70 font-semibold text-emerald-950'
-                                  : 'border-slate-200 bg-white text-slate-700'
+                                  : 'border-[#DCE1EB] bg-white text-[#334155]'
                               )}
                             >
                               <span
                                 className={clsx(
-                                  'flex h-5 w-5 shrink-0 items-center justify-center rounded text-xs font-bold',
+                                  'flex h-5 w-5 shrink-0 items-center justify-center rounded font-mono text-xs font-bold',
                                   isCorrect
                                     ? 'bg-emerald-700 text-white'
-                                    : 'bg-slate-100 text-slate-700'
+                                    : 'bg-[#EEF1F7] text-[#334155]'
                                 )}
                               >
                                 {key}
@@ -739,8 +994,9 @@ export function TeacherListEditorPage() {
                         })}
                       </div>
 
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-700">
-                        <span className="font-bold">Resolução comentada:</span> {q.explanation}
+                      <div className="rounded-lg border border-[#DCE1EB] bg-[#F8F8F5] px-3.5 py-2.5 text-xs text-[#334155]">
+                        <span className="font-bold text-[#131B2E]">Resolução comentada:</span>{' '}
+                        {q.explanation}
                       </div>
                     </Card>
                   ))}

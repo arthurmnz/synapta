@@ -79,8 +79,11 @@ class SubmissionFeedbackOut(BaseModel):
     submission_id: UUID
     question_list_id: UUID
     question_list_title: str
-    classroom_id: UUID
-    classroom_name: str
+    classroom_id: UUID | None = None
+    classroom_name: str | None = None
+    organization_id: UUID | None = None
+    organization_name: str | None = None
+    is_standalone: bool = False
     student_id: UUID
     student_name: str
     student_email: str
@@ -107,8 +110,11 @@ class StudentSubmissionSummaryOut(BaseModel):
     submission_id: UUID
     question_list_id: UUID
     question_list_title: str
-    classroom_id: UUID
-    classroom_name: str
+    classroom_id: UUID | None = None
+    classroom_name: str | None = None
+    organization_id: UUID | None = None
+    organization_name: str | None = None
+    is_standalone: bool = False
     attempt_number: int
     attempts_used_total: int
     correct_count: int
@@ -127,8 +133,11 @@ class RetakeRequestOut(BaseModel):
     id: UUID
     question_list_id: UUID
     question_list_title: str
-    classroom_id: UUID
-    classroom_name: str
+    classroom_id: UUID | None = None
+    classroom_name: str | None = None
+    organization_id: UUID | None = None
+    organization_name: str | None = None
+    is_standalone: bool = False
     student_id: UUID
     student_name: str
     student_email: str

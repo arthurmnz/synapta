@@ -2,15 +2,17 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
+import hashlib
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.exceptions import APIError
-from app.models.classroom import ClassroomEnrollment
-from app.models.question_list import Question, QuestionList
+from app.models.classroom import Classroom, ClassroomEnrollment
+from app.models.organization import Organization, OrganizationMembership
+from app.models.question_list import Question, QuestionList, QuestionListUnlock
 from app.models.submission import RetakeAuthorization, Submission, SubmissionAnswer
 from app.models.user import User
 from app.schemas.analytics import TopicMetricOut
@@ -80,11 +82,101 @@ def build_topic_metrics(items: Sequence[tuple[UUID, str, bool]]) -> list[TopicMe
     return metrics
 
 
+def extract_list_hierarchy_meta(qlist: QuestionList) -> dict:
+    """Extract optional classroom and organization metadata from a QuestionList."""
+    classroom = qlist.classroom
+    organization = classroom.organization if classroom is not None else None
+    return {
+        "classroom_id": classroom.id if classroom is not None else None,
+        "classroom_name": classroom.name if classroom is not None else None,
+        "organization_id": organization.id if organization is not None else None,
+        "organization_name": organization.name if organization is not None else None,
+        "is_standalone": qlist.is_standalone,
+    }
+
+
+def _advisory_lock_keys(student_id: UUID, list_id: UUID) -> tuple[int, int]:
+    """Compute deterministic signed 32-bit advisory lock keys for a (student, list) pair."""
+    digest = hashlib.sha256(f"{student_id}:{list_id}".encode("utf-8")).digest()
+    k1 = int.from_bytes(digest[0:4], "big", signed=True)
+    k2 = int.from_bytes(digest[4:8], "big", signed=True)
+    return k1, k2
+
+
+def _acquire_student_list_submission_lock(db: Session, student_id: UUID, list_id: UUID) -> None:
+    """Acquire a transaction-scoped PostgreSQL advisory lock for (student_id, list_id)."""
+    k1, k2 = _advisory_lock_keys(student_id, list_id)
+    db.execute(text("SELECT pg_advisory_xact_lock(:k1, :k2)"), {"k1": k1, "k2": k2})
+
+
+def enforce_student_list_access(
+    db: Session,
+    qlist: QuestionList,
+    student_id: UUID,
+    *,
+    lock_enrollment: bool = False,
+) -> None:
+    """Verify private organization membership, classroom enrollment, and private list unlock."""
+    if qlist.is_standalone:
+        return
+
+    classroom = db.get(Classroom, qlist.classroom_id)
+    if classroom is None:
+        raise APIError(status_code=404, detail="Turma não encontrada.", code="CLASSROOM_NOT_FOUND")
+
+    if classroom.organization_id is not None:
+        org = db.get(Organization, classroom.organization_id)
+        if org is not None and org.visibility == "private":
+            org_member = db.scalar(
+                select(OrganizationMembership.id).where(
+                    OrganizationMembership.organization_id == org.id,
+                    OrganizationMembership.user_id == student_id,
+                )
+            )
+            if org_member is None:
+                raise APIError(
+                    status_code=403,
+                    detail="Este simulado pertence a uma organização privada. Entre na organização primeiro.",
+                    code="ORGANIZATION_ACCESS_REQUIRED",
+                )
+
+    enroll_stmt = select(ClassroomEnrollment).where(
+        ClassroomEnrollment.classroom_id == qlist.classroom_id,
+        ClassroomEnrollment.student_id == student_id,
+    )
+    if lock_enrollment:
+        enroll_stmt = enroll_stmt.with_for_update()
+
+    enrollment = db.scalar(enroll_stmt)
+    if enrollment is None:
+        raise APIError(
+            status_code=403,
+            detail="Você precisa estar matriculado nesta turma para acessar a lista.",
+            code="NOT_ENROLLED",
+        )
+
+    if qlist.visibility == "private":
+        unlock = db.scalar(
+            select(QuestionListUnlock.id).where(
+                QuestionListUnlock.question_list_id == qlist.id,
+                QuestionListUnlock.student_id == student_id,
+            )
+        )
+        if unlock is None:
+            raise APIError(
+                status_code=403,
+                detail="Este simulado é privado. Insira o código de acesso para desbloquear as questões.",
+                code="LIST_LOCKED",
+            )
+
+
 def _get_submission_with_details(db: Session, submission_id: UUID) -> Submission:
     submission = db.scalar(
         select(Submission)
         .options(
-            joinedload(Submission.question_list).joinedload(QuestionList.classroom),
+            joinedload(Submission.question_list)
+            .joinedload(QuestionList.classroom)
+            .joinedload(Classroom.organization),
             joinedload(Submission.student),
             joinedload(Submission.answers).joinedload(SubmissionAnswer.question).joinedload(Question.topic),
         )
@@ -99,8 +191,8 @@ def build_submission_feedback(db: Session, submission_id: UUID) -> SubmissionFee
     """Build detailed feedback response for a submission."""
     submission = _get_submission_with_details(db, submission_id)
     qlist = submission.question_list
-    classroom = qlist.classroom
     student = submission.student
+    hierarchy = extract_list_hierarchy_meta(qlist)
 
     attempts_used_total = int(
         db.scalar(
@@ -158,8 +250,11 @@ def build_submission_feedback(db: Session, submission_id: UUID) -> SubmissionFee
         submission_id=submission.id,
         question_list_id=qlist.id,
         question_list_title=qlist.title,
-        classroom_id=classroom.id,
-        classroom_name=classroom.name,
+        classroom_id=hierarchy["classroom_id"],
+        classroom_name=hierarchy["classroom_name"],
+        organization_id=hierarchy["organization_id"],
+        organization_name=hierarchy["organization_name"],
+        is_standalone=hierarchy["is_standalone"],
         student_id=student.id,
         student_name=student.name,
         student_email=student.email,
@@ -188,37 +283,23 @@ def submit_list(
     payload: SubmissionCreate,
 ) -> SubmissionFeedbackOut:
     """Grade and persist a full question-list attempt transactionally."""
-    # Acquire FOR SHARE on QuestionList before locking enrollment to prevent races with question edits
+    # Acquire FOR SHARE on QuestionList before checking access/locking to avoid races with question edits
     question_list = db.scalar(
         select(QuestionList)
         .where(QuestionList.id == list_id)
         .with_for_update(read=True)
     )
-    if question_list is None:
-        raise APIError(status_code=404, detail="Lista de questões não encontrada.", code="LIST_NOT_FOUND")
-
-    # Lock enrollment row to serialize concurrent submissions by the same student
-    enrollment = db.scalar(
-        select(ClassroomEnrollment)
-        .where(
-            ClassroomEnrollment.classroom_id == question_list.classroom_id,
-            ClassroomEnrollment.student_id == student_id,
-        )
-        .with_for_update()
-    )
-    if enrollment is None:
-        raise APIError(
-            status_code=403,
-            detail="Você precisa estar matriculado nesta turma para responder à lista.",
-            code="NOT_ENROLLED",
-        )
-
-    if not question_list.is_published:
+    if question_list is None or not question_list.is_published:
         raise APIError(
             status_code=404,
-            detail="Esta lista não está publicada para respostas.",
-            code="LIST_NOT_PUBLISHED",
+            detail="Simulado não encontrado ou ainda não publicado.",
+            code="LIST_NOT_FOUND",
         )
+
+    enforce_student_list_access(db, question_list, student_id, lock_enrollment=True)
+
+    # Transaction-scoped advisory lock serializes concurrent submissions (including standalone lists)
+    _acquire_student_list_submission_lock(db, student_id, list_id)
 
     questions = db.scalars(
         select(Question)
@@ -323,7 +404,11 @@ def list_student_submissions(db: Session, student_id: UUID) -> list[StudentSubmi
     """Return chronological submission history for the authenticated student."""
     submissions = db.scalars(
         select(Submission)
-        .options(joinedload(Submission.question_list).joinedload(QuestionList.classroom))
+        .options(
+            joinedload(Submission.question_list)
+            .joinedload(QuestionList.classroom)
+            .joinedload(Classroom.organization)
+        )
         .where(Submission.student_id == student_id)
         .order_by(Submission.submitted_at.desc(), Submission.attempt_number.desc())
     ).all()
@@ -352,7 +437,7 @@ def list_student_submissions(db: Session, student_id: UUID) -> list[StudentSubmi
     results: list[StudentSubmissionSummaryOut] = []
     for sub in submissions:
         qlist = sub.question_list
-        classroom = qlist.classroom
+        hierarchy = extract_list_hierarchy_meta(qlist)
         retake_status, _ = resolve_retake_state(retakes_by_list[qlist.id])
         score = float(sub.score_percentage)
         results.append(
@@ -360,8 +445,11 @@ def list_student_submissions(db: Session, student_id: UUID) -> list[StudentSubmi
                 submission_id=sub.id,
                 question_list_id=qlist.id,
                 question_list_title=qlist.title,
-                classroom_id=classroom.id,
-                classroom_name=classroom.name,
+                classroom_id=hierarchy["classroom_id"],
+                classroom_name=hierarchy["classroom_name"],
+                organization_id=hierarchy["organization_id"],
+                organization_name=hierarchy["organization_name"],
+                is_standalone=hierarchy["is_standalone"],
                 attempt_number=sub.attempt_number,
                 attempts_used_total=attempts_by_list.get(qlist.id, sub.attempt_number),
                 correct_count=sub.correct_count,
@@ -450,11 +538,11 @@ def update_teacher_comment(
 def _build_retake_request_out(db: Session, retake: RetakeAuthorization) -> RetakeRequestOut:
     qlist = retake.question_list or db.scalar(
         select(QuestionList)
-        .options(joinedload(QuestionList.classroom))
+        .options(joinedload(QuestionList.classroom).joinedload(Classroom.organization))
         .where(QuestionList.id == retake.question_list_id)
     )
-    classroom = qlist.classroom
     student = retake.student or db.get(User, retake.student_id)
+    hierarchy = extract_list_hierarchy_meta(qlist)
 
     student_subs = db.scalars(
         select(Submission)
@@ -471,8 +559,11 @@ def _build_retake_request_out(db: Session, retake: RetakeAuthorization) -> Retak
         id=retake.id,
         question_list_id=qlist.id,
         question_list_title=qlist.title,
-        classroom_id=classroom.id,
-        classroom_name=classroom.name,
+        classroom_id=hierarchy["classroom_id"],
+        classroom_name=hierarchy["classroom_name"],
+        organization_id=hierarchy["organization_id"],
+        organization_name=hierarchy["organization_name"],
+        is_standalone=hierarchy["is_standalone"],
         student_id=student.id,
         student_name=student.name,
         student_email=student.email,
@@ -494,24 +585,13 @@ def create_retake_request(
     """Create a pending student retake request for a previously submitted list."""
     question_list = db.scalar(
         select(QuestionList)
-        .options(joinedload(QuestionList.classroom))
+        .options(joinedload(QuestionList.classroom).joinedload(Classroom.organization))
         .where(QuestionList.id == list_id)
     )
     if question_list is None or not question_list.is_published:
         raise APIError(status_code=404, detail="Lista de questões não encontrada.", code="LIST_NOT_FOUND")
 
-    enrollment = db.scalar(
-        select(ClassroomEnrollment).where(
-            ClassroomEnrollment.classroom_id == question_list.classroom_id,
-            ClassroomEnrollment.student_id == student_id,
-        )
-    )
-    if enrollment is None:
-        raise APIError(
-            status_code=403,
-            detail="Você precisa estar matriculado nesta turma.",
-            code="NOT_ENROLLED",
-        )
+    enforce_student_list_access(db, question_list, student_id, lock_enrollment=False)
 
     attempts_used = int(
         db.scalar(
@@ -584,7 +664,9 @@ def list_teacher_retake_requests(
         select(RetakeAuthorization)
         .join(QuestionList, QuestionList.id == RetakeAuthorization.question_list_id)
         .options(
-            joinedload(RetakeAuthorization.question_list).joinedload(QuestionList.classroom),
+            joinedload(RetakeAuthorization.question_list)
+            .joinedload(QuestionList.classroom)
+            .joinedload(Classroom.organization),
             joinedload(RetakeAuthorization.student),
         )
         .where(QuestionList.teacher_id == teacher_id)
@@ -617,13 +699,17 @@ def list_teacher_retake_requests(
         pair_subs = subs_by_pair[(row.question_list_id, row.student_id)]
         attempts_used = len(pair_subs)
         last_score = float(pair_subs[0].score_percentage) if pair_subs else 0.0
+        hierarchy = extract_list_hierarchy_meta(row.question_list)
         result.append(
             RetakeRequestOut(
                 id=row.id,
                 question_list_id=row.question_list.id,
                 question_list_title=row.question_list.title,
-                classroom_id=row.question_list.classroom.id,
-                classroom_name=row.question_list.classroom.name,
+                classroom_id=hierarchy["classroom_id"],
+                classroom_name=hierarchy["classroom_name"],
+                organization_id=hierarchy["organization_id"],
+                organization_name=hierarchy["organization_name"],
+                is_standalone=hierarchy["is_standalone"],
                 student_id=row.student.id,
                 student_name=row.student.name,
                 student_email=row.student.email,
@@ -648,7 +734,9 @@ def decide_retake_request(
     retake = db.scalar(
         select(RetakeAuthorization)
         .options(
-            joinedload(RetakeAuthorization.question_list).joinedload(QuestionList.classroom),
+            joinedload(RetakeAuthorization.question_list)
+            .joinedload(QuestionList.classroom)
+            .joinedload(Classroom.organization),
             joinedload(RetakeAuthorization.student),
         )
         .where(RetakeAuthorization.id == request_id)
@@ -690,7 +778,7 @@ def authorize_retake_proactively(
     """Proactively grant a retake (or approve pending request) idempotently."""
     question_list = db.scalar(
         select(QuestionList)
-        .options(joinedload(QuestionList.classroom))
+        .options(joinedload(QuestionList.classroom).joinedload(Classroom.organization))
         .where(QuestionList.id == list_id)
     )
     if question_list is None:
@@ -706,20 +794,23 @@ def authorize_retake_proactively(
     if student is None or student.role != "student":
         raise APIError(status_code=404, detail="Aluno não encontrado.", code="STUDENT_NOT_FOUND")
 
-    enrollment = db.scalar(
-        select(ClassroomEnrollment)
-        .where(
-            ClassroomEnrollment.classroom_id == question_list.classroom_id,
-            ClassroomEnrollment.student_id == student_id,
+    if not question_list.is_standalone:
+        enrollment = db.scalar(
+            select(ClassroomEnrollment)
+            .where(
+                ClassroomEnrollment.classroom_id == question_list.classroom_id,
+                ClassroomEnrollment.student_id == student_id,
+            )
+            .with_for_update()
         )
-        .with_for_update()
-    )
-    if enrollment is None:
-        raise APIError(
-            status_code=400,
-            detail="O aluno não está matriculado na turma desta lista.",
-            code="STUDENT_NOT_ENROLLED",
-        )
+        if enrollment is None:
+            raise APIError(
+                status_code=400,
+                detail="O aluno não está matriculado na turma desta lista.",
+                code="STUDENT_NOT_ENROLLED",
+            )
+
+    _acquire_student_list_submission_lock(db, student_id, list_id)
 
     attempts_used = int(
         db.scalar(
@@ -740,7 +831,9 @@ def authorize_retake_proactively(
     active = db.scalar(
         select(RetakeAuthorization)
         .options(
-            joinedload(RetakeAuthorization.question_list).joinedload(QuestionList.classroom),
+            joinedload(RetakeAuthorization.question_list)
+            .joinedload(QuestionList.classroom)
+            .joinedload(Classroom.organization),
             joinedload(RetakeAuthorization.student),
         )
         .where(
@@ -777,7 +870,9 @@ def authorize_retake_proactively(
         existing_active = db.scalar(
             select(RetakeAuthorization)
             .options(
-                joinedload(RetakeAuthorization.question_list).joinedload(QuestionList.classroom),
+                joinedload(RetakeAuthorization.question_list)
+                .joinedload(QuestionList.classroom)
+                .joinedload(Classroom.organization),
                 joinedload(RetakeAuthorization.student),
             )
             .where(

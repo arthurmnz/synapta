@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   Clock,
+  KeyRound,
   Lock,
   MessageSquareText,
   Send,
@@ -17,6 +18,7 @@ import {
   EmptyState,
   LoadingState,
 } from '../../components/ui';
+import { ListContextBadges, VisibilityBadge } from '../../components/shared/AccessBadges';
 import { AppShell } from '../../components/layout/AppShell';
 import { apiClient, ApiError } from '../../lib/apiClient';
 import { formatDateTime, formatPercent, formatScoreRatio } from '../../lib/formatters';
@@ -32,6 +34,11 @@ export function StudentQuizPage() {
   const [answers, setAnswers] = useState<Record<string, OptionKey>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isLocked, setIsLocked] = useState(false);
+  const [unlockCode, setUnlockCode] = useState('');
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [unlocking, setUnlocking] = useState(false);
+
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -43,15 +50,23 @@ export function StudentQuizPage() {
     if (!listId) return;
     setLoading(true);
     setError(null);
+    setIsLocked(false);
     try {
       const data = await apiClient.getStudentListDetail(listId);
       setDetail(data);
     } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : 'Não foi possível carregar este simulado.'
-      );
+      if (
+        err instanceof ApiError &&
+        err.status === 403 &&
+        (err.code === 'LIST_LOCKED' || err.message.toLowerCase().includes('código de acesso'))
+      ) {
+        setIsLocked(true);
+        setError(err.message);
+      } else {
+        setError(
+          err instanceof ApiError ? err.message : 'Não foi possível carregar este simulado.'
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -60,6 +75,34 @@ export function StudentQuizPage() {
   useEffect(() => {
     void loadQuiz();
   }, [loadQuiz]);
+
+  const handleUnlockDirect = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!listId) return;
+    const trimmed = unlockCode.trim();
+    if (!trimmed) {
+      setUnlockError('Informe o código de acesso fornecido pelo professor.');
+      return;
+    }
+
+    setUnlocking(true);
+    setUnlockError(null);
+    try {
+      const unlocked = await apiClient.unlockStudentList(listId, trimmed);
+      setDetail(unlocked);
+      setIsLocked(false);
+      setError(null);
+      setUnlockCode('');
+    } catch (err) {
+      setUnlockError(
+        err instanceof ApiError
+          ? err.message
+          : 'Código inválido ou não foi possível desbloquear este simulado.'
+      );
+    } finally {
+      setUnlocking(false);
+    }
+  };
 
   const sortedQuestions = useMemo(() => {
     if (!detail) return [];
@@ -163,6 +206,66 @@ export function StudentQuizPage() {
 
         {loading ? (
           <LoadingState label="Carregando simulado..." variant="detail" />
+        ) : isLocked ? (
+          <Card className="max-w-xl mx-auto">
+            <div className="flex items-start gap-3.5">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-[#FDE68A] bg-[#FFFBEB] text-[#92400E]">
+                <Lock className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <div className="min-w-0 flex-1 space-y-1">
+                <h1 className="font-display text-lg font-bold text-[#131B2E]">
+                  Simulado Privado Bloqueado
+                </h1>
+                <p className="text-sm text-[#4B5568]">
+                  {error ||
+                    'Este simulado exige um código de acesso para desbloqueio permanente.'}
+                </p>
+              </div>
+            </div>
+
+            {unlockError && (
+              <Alert tone="danger" className="mt-4">
+                {unlockError}
+              </Alert>
+            )}
+
+            <form onSubmit={handleUnlockDirect} className="mt-5 space-y-4">
+              <div>
+                <label
+                  htmlFor="direct-unlock-code"
+                  className="block text-sm font-semibold text-[#131B2E]"
+                >
+                  Código de acesso do simulado
+                </label>
+                <input
+                  id="direct-unlock-code"
+                  type="text"
+                  autoFocus
+                  autoComplete="off"
+                  value={unlockCode}
+                  onChange={(e) => {
+                    setUnlockCode(e.target.value);
+                    if (unlockError) setUnlockError(null);
+                  }}
+                  placeholder="Digite o código informado pelo professor"
+                  className="mt-1.5 block min-h-[44px] w-full rounded-lg border border-[#CBD3E1] bg-white px-3.5 py-2.5 font-mono text-base sm:text-sm tracking-wider text-[#131B2E] placeholder:font-sans placeholder:tracking-normal focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  isLoading={unlocking}
+                  leftIcon={<KeyRound className="h-4 w-4" />}
+                >
+                  Desbloquear Simulado
+                </Button>
+                <Link to="/student/dashboard">
+                  <Button variant="ghost">Voltar</Button>
+                </Link>
+              </div>
+            </form>
+          </Card>
         ) : error ? (
           <Alert
             tone="danger"
@@ -177,12 +280,21 @@ export function StudentQuizPage() {
           </Alert>
         ) : !detail ? null : (
           <>
-            {/* Exam Sheet Header with Cartesian Drafting Grid */}
+            {/* Exam Sheet Header */}
             <div className="rounded-[10px] border border-[#DCE1EB] bg-math-grid overflow-hidden shadow-card">
               <div className="p-5 sm:p-6 flex flex-col md:flex-row md:items-start justify-between gap-5">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge tone="navy">{detail.classroom_name}</Badge>
+                    <ListContextBadges
+                      isStandalone={detail.is_standalone}
+                      classroomName={detail.classroom_name}
+                      organizationName={detail.organization_name}
+                    />
+                    <VisibilityBadge
+                      visibility={detail.visibility}
+                      entity="masculine"
+                      unlocked={!detail.is_standalone && detail.visibility === 'private'}
+                    />
                     {detail.can_attempt ? (
                       <Badge tone="primary" className="font-mono">
                         Tentativa #{detail.next_attempt_number}
@@ -256,7 +368,9 @@ export function StudentQuizPage() {
                       <div>
                         <p className="text-xs font-semibold text-[#4B5568]">
                           Última entrega —{' '}
-                          <span className="font-mono">Tentativa #{latestSubmission.attempt_number}</span>
+                          <span className="font-mono">
+                            Tentativa #{latestSubmission.attempt_number}
+                          </span>
                         </p>
                         <div className="mt-1 flex flex-wrap items-center gap-3">
                           <span className="font-display text-2xl font-bold text-[#131B2E] tabular-nums">
@@ -313,7 +427,7 @@ export function StudentQuizPage() {
                           rows={3}
                           value={retakeReason}
                           onChange={(e) => setRetakeReason(e.target.value)}
-                          placeholder="Ex.: Revise os tópicos de equações e gostaria de tentar novamente."
+                          placeholder="Ex.: Revisei os assuntos avaliados e gostaria de tentar novamente."
                           className="mt-2.5 block w-full rounded-lg border border-[#CBD3E1] bg-white px-3.5 py-2.5 text-base sm:text-sm text-[#131B2E] placeholder:text-slate-400 focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
                         />
                       </div>
@@ -413,7 +527,7 @@ export function StudentQuizPage() {
                         id={`question-${question.id}`}
                         className="scroll-mt-20 rounded-[10px] border border-[#DCE1EB] bg-white shadow-card overflow-hidden grid grid-cols-1 md:grid-cols-[84px_1fr]"
                       >
-                        {/* Mathematical Index Gutter */}
+                        {/* Index Gutter */}
                         <div className="border-b md:border-b-0 md:border-r border-[#DCE1EB] bg-[#F8F8F5] px-4 py-3 md:py-5 flex md:flex-col items-center md:items-start justify-between md:justify-start gap-2">
                           <span className="font-mono text-lg font-bold text-[#131B2E] tabular-nums">
                             {qCode}

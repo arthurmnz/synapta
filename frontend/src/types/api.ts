@@ -4,6 +4,10 @@ export type UserRole = 'student' | 'teacher';
 export type OptionKey = 'A' | 'B' | 'C' | 'D';
 export type RetakeStatus = 'none' | 'pending' | 'approved' | 'rejected';
 export type AnalyticsScope = 'latest' | 'all';
+export type VisibilityType = 'public' | 'private';
+export type OrganizationMemberRole = 'owner' | 'teacher' | 'student';
+export type ListTypeFilter = 'all' | 'classroom' | 'standalone';
+export type StudentListScopeFilter = 'all' | 'classroom' | 'standalone';
 
 export interface UserOut {
   id: EntityId;
@@ -59,12 +63,79 @@ export interface QuestionOptions {
   D: string;
 }
 
+// --- Organization types ---
+
+export interface OrganizationCreatePayload {
+  name: string;
+  description?: string | null;
+  visibility: VisibilityType;
+  access_code?: string | null;
+}
+
+export interface OrganizationUpdatePayload {
+  name?: string;
+  description?: string | null;
+  visibility?: VisibilityType;
+  access_code?: string | null;
+}
+
+export interface OrganizationJoinPayload {
+  access_code?: string | null;
+}
+
+export interface OrganizationRefOut {
+  id: EntityId;
+  name: string;
+  visibility: VisibilityType;
+}
+
+export interface TeacherOrganizationOut {
+  id: EntityId;
+  name: string;
+  description: string | null;
+  visibility: VisibilityType;
+  is_owner: boolean;
+  is_member: boolean;
+  access_code: string | null;
+  owner_id: EntityId;
+  owner_name: string;
+  teacher_count: number;
+  classroom_count: number;
+  student_count: number;
+  created_at: string;
+}
+
+export interface StudentOrganizationOut {
+  id: EntityId;
+  name: string;
+  description: string | null;
+  owner_name: string;
+  visibility: VisibilityType;
+  is_member: boolean;
+  public_classroom_count: number;
+  total_classroom_count: number;
+  joined_at: string | null;
+}
+
+export type AvailableOrganizationOut = StudentOrganizationOut;
+
+export interface OrganizationMembershipOut {
+  organization_id: EntityId;
+  user_id: EntityId;
+  member_role: OrganizationMemberRole;
+  joined_at: string;
+}
+
 // --- Student types ---
 
 export interface StudentClassroomOut {
   id: EntityId;
   name: string;
   description: string | null;
+  organization_id?: EntityId | null;
+  organization_name?: string | null;
+  organization_visibility?: VisibilityType | null;
+  visibility: VisibilityType;
   teacher_name: string;
   published_lists_count: number;
   enrolled_at: string;
@@ -74,10 +145,18 @@ export interface AvailableClassroomOut {
   id: EntityId;
   name: string;
   description: string | null;
+  organization_id?: EntityId | null;
+  organization_name?: string | null;
+  organization_visibility?: VisibilityType | null;
+  visibility: VisibilityType;
   teacher_name: string;
   student_count: number;
   published_lists_count: number;
   is_enrolled: boolean;
+}
+
+export interface ClassroomEnrollPayload {
+  access_code?: string | null;
 }
 
 export interface EnrollmentOut {
@@ -88,8 +167,13 @@ export interface EnrollmentOut {
 
 export interface StudentListSummaryOut {
   id: EntityId;
-  classroom_id: EntityId;
-  classroom_name: string;
+  classroom_id: EntityId | null;
+  classroom_name: string | null;
+  organization_id?: EntityId | null;
+  organization_name?: string | null;
+  is_standalone: boolean;
+  visibility: VisibilityType;
+  is_unlocked: boolean;
   teacher_name: string;
   title: string;
   description: string | null;
@@ -123,8 +207,13 @@ export interface StudentPastSubmissionItemOut {
 
 export interface StudentListDetailOut {
   id: EntityId;
-  classroom_id: EntityId;
-  classroom_name: string;
+  classroom_id: EntityId | null;
+  classroom_name: string | null;
+  organization_id?: EntityId | null;
+  organization_name?: string | null;
+  is_standalone: boolean;
+  visibility: VisibilityType;
+  is_unlocked: boolean;
   teacher_name: string;
   title: string;
   description: string | null;
@@ -134,6 +223,10 @@ export interface StudentListDetailOut {
   retake_status: RetakeStatus;
   questions: StudentQuestionOut[];
   past_submissions: StudentPastSubmissionItemOut[];
+}
+
+export interface QuestionListUnlockPayload {
+  access_code: string;
 }
 
 export interface QuizAnswerInput {
@@ -149,8 +242,11 @@ export interface StudentSubmissionSummaryOut {
   submission_id: EntityId;
   question_list_id: EntityId;
   question_list_title: string;
-  classroom_id: EntityId;
-  classroom_name: string;
+  classroom_id: EntityId | null;
+  classroom_name: string | null;
+  organization_id?: EntityId | null;
+  organization_name?: string | null;
+  is_standalone?: boolean;
   attempt_number: number;
   attempts_used_total: number;
   correct_count: number;
@@ -180,8 +276,11 @@ export interface SubmissionFeedbackOut {
   submission_id: EntityId;
   question_list_id: EntityId;
   question_list_title: string;
-  classroom_id: EntityId;
-  classroom_name: string;
+  classroom_id: EntityId | null;
+  classroom_name: string | null;
+  organization_id?: EntityId | null;
+  organization_name?: string | null;
+  is_standalone?: boolean;
   student_id: EntityId;
   student_name: string;
   student_email: string;
@@ -206,8 +305,11 @@ export interface RetakeRequestOut {
   id: EntityId;
   question_list_id: EntityId;
   question_list_title: string;
-  classroom_id: EntityId;
-  classroom_name: string;
+  classroom_id: EntityId | null;
+  classroom_name: string | null;
+  organization_id?: EntityId | null;
+  organization_name?: string | null;
+  is_standalone?: boolean;
   student_id: EntityId;
   student_name: string;
   student_email: string;
@@ -225,6 +327,12 @@ export interface TeacherClassroomOut {
   id: EntityId;
   name: string;
   description: string | null;
+  organization_id?: EntityId | null;
+  organization_name?: string | null;
+  visibility: VisibilityType;
+  access_code?: string | null;
+  teacher_id?: EntityId;
+  teacher_name?: string;
   student_count: number;
   list_count: number;
   created_at: string;
@@ -233,12 +341,20 @@ export interface TeacherClassroomOut {
 export interface TeacherClassroomPayload {
   name: string;
   description?: string | null;
+  organization_id?: EntityId | null;
+  visibility?: VisibilityType;
+  access_code?: string | null;
 }
 
 export interface TeacherListSummaryOut {
   id: EntityId;
-  classroom_id: EntityId;
-  classroom_name: string;
+  classroom_id: EntityId | null;
+  classroom_name: string | null;
+  organization_id?: EntityId | null;
+  organization_name?: string | null;
+  is_standalone: boolean;
+  visibility: VisibilityType;
+  access_code?: string | null;
   title: string;
   description: string | null;
   is_published: boolean;
@@ -262,8 +378,13 @@ export interface TeacherQuestionOut {
 
 export interface TeacherListDetailOut {
   id: EntityId;
-  classroom_id: EntityId;
-  classroom_name: string;
+  classroom_id: EntityId | null;
+  classroom_name: string | null;
+  organization_id?: EntityId | null;
+  organization_name?: string | null;
+  is_standalone: boolean;
+  visibility: VisibilityType;
+  access_code?: string | null;
   title: string;
   description: string | null;
   is_published: boolean;
@@ -276,15 +397,22 @@ export interface TeacherListDetailOut {
 }
 
 export interface TeacherListCreatePayload {
-  classroom_id: EntityId;
+  is_standalone: boolean;
+  classroom_id?: EntityId | null;
   title: string;
   description?: string | null;
+  visibility?: VisibilityType;
+  access_code?: string | null;
 }
 
 export interface TeacherListUpdatePayload {
+  is_standalone?: boolean;
+  classroom_id?: EntityId | null;
   title?: string;
   description?: string | null;
   is_published?: boolean;
+  visibility?: VisibilityType;
+  access_code?: string | null;
 }
 
 export interface TeacherQuestionCreatePayload {
@@ -305,10 +433,20 @@ export interface TeacherQuestionUpdatePayload {
   order_index?: number;
 }
 
+export interface StandaloneListAnalyticsOut {
+  list_id: EntityId;
+  title: string;
+  submissions_count: number;
+  distinct_students_count: number;
+  average_score_percentage: number;
+}
+
 export interface TeacherAnalyticsKpisOut {
+  total_organizations?: number;
   total_classrooms: number;
   total_students: number;
   total_published_lists: number;
+  total_standalone_lists?: number;
   total_submissions: number;
   overall_accuracy_percentage: number;
   pending_retake_requests: number;
@@ -319,11 +457,15 @@ export interface TeacherTopicAnalyticsOut {
   topics: TopicMetricOut[];
   lowest_performing_topics: TopicMetricOut[];
   highest_performing_topics: TopicMetricOut[];
+  standalone_lists?: StandaloneListAnalyticsOut[];
 }
 
 export interface ClassroomRef {
   id: EntityId;
   name: string;
+  organization_id?: EntityId | null;
+  organization_name?: string | null;
+  visibility?: VisibilityType;
 }
 
 export interface TeacherStudentSummaryOut {
@@ -333,6 +475,7 @@ export interface TeacherStudentSummaryOut {
   classrooms: ClassroomRef[];
   lists_completed_count: number;
   total_attempts_count: number;
+  standalone_submissions_count?: number;
   average_score_percentage: number | null;
   last_submitted_at: string | null;
   has_pending_retake: boolean;
@@ -342,8 +485,11 @@ export interface TeacherStudentSubmissionItemOut {
   submission_id: EntityId;
   question_list_id: EntityId;
   question_list_title: string;
-  classroom_id: EntityId;
-  classroom_name: string;
+  classroom_id: EntityId | null;
+  classroom_name: string | null;
+  organization_id?: EntityId | null;
+  organization_name?: string | null;
+  is_standalone?: boolean;
   attempt_number: number;
   attempts_on_list: number;
   correct_count: number;
@@ -367,6 +513,7 @@ export interface TeacherStudentDetailOut {
     average_score_percentage: number | null;
     lists_completed_count: number;
     total_attempts_count: number;
+    standalone_submissions_count?: number;
     strongest_topic: TopicMetricOut | string | null;
     weakest_topic: TopicMetricOut | string | null;
   };

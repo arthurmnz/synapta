@@ -4,11 +4,13 @@ import { ProtectedRoute } from './components/layout/ProtectedRoute';
 import { LoginPage } from './pages/auth/LoginPage';
 import { RegisterPage } from './pages/auth/RegisterPage';
 import { StudentDashboardPage } from './pages/student/StudentDashboardPage';
+import { StudentOrganizationsPage } from './pages/student/StudentOrganizationsPage';
 import { StudentClassroomsPage } from './pages/student/StudentClassroomsPage';
 import { StudentQuizPage } from './pages/student/StudentQuizPage';
 import { StudentFeedbackPage } from './pages/student/StudentFeedbackPage';
 import { StudentHistoryPage } from './pages/student/StudentHistoryPage';
 import { TeacherDashboardPage } from './pages/teacher/TeacherDashboardPage';
+import { TeacherOrganizationsPage } from './pages/teacher/TeacherOrganizationsPage';
 import { TeacherClassroomsPage } from './pages/teacher/TeacherClassroomsPage';
 import { TeacherListEditorPage } from './pages/teacher/TeacherListEditorPage';
 import { TeacherStudentsPage } from './pages/teacher/TeacherStudentsPage';
@@ -44,6 +46,14 @@ export function AppRoutes() {
         element={
           <ProtectedRoute allowedRole="student">
             <StudentDashboardPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/student/organizations"
+        element={
+          <ProtectedRoute allowedRole="student">
+            <StudentOrganizationsPage />
           </ProtectedRoute>
         }
       />
@@ -86,6 +96,14 @@ export function AppRoutes() {
         element={
           <ProtectedRoute allowedRole="teacher">
             <TeacherDashboardPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/teacher/organizations"
+        element={
+          <ProtectedRoute allowedRole="teacher">
+            <TeacherOrganizationsPage />
           </ProtectedRoute>
         }
       />

@@ -10,7 +10,8 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.models.classroom import Classroom, ClassroomEnrollment
-    from app.models.question_list import QuestionList
+    from app.models.organization import Organization, OrganizationMembership
+    from app.models.question_list import QuestionList, QuestionListUnlock
     from app.models.submission import RetakeAuthorization, Submission
 
 
@@ -29,6 +30,12 @@ class User(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
+    organizations_owned: Mapped[list["Organization"]] = relationship(
+        back_populates="owner_teacher", cascade="all, delete-orphan", passive_deletes=True
+    )
+    organization_memberships: Mapped[list["OrganizationMembership"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", passive_deletes=True
+    )
     classrooms_taught: Mapped[list["Classroom"]] = relationship(
         back_populates="teacher", cascade="all, delete-orphan", passive_deletes=True
     )
@@ -37,6 +44,9 @@ class User(Base):
     )
     question_lists_created: Mapped[list["QuestionList"]] = relationship(
         back_populates="teacher", cascade="all, delete-orphan", passive_deletes=True
+    )
+    question_list_unlocks: Mapped[list["QuestionListUnlock"]] = relationship(
+        back_populates="student", cascade="all, delete-orphan", passive_deletes=True
     )
     submissions: Mapped[list["Submission"]] = relationship(
         back_populates="student",

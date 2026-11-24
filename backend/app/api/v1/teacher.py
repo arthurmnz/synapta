@@ -12,6 +12,13 @@ from app.schemas.analytics import (
     TeacherTopicAnalyticsOut,
 )
 from app.schemas.classroom import ClassroomCreate, ClassroomUpdate, TeacherClassroomOut
+from app.schemas.organization import (
+    OrganizationCreate,
+    OrganizationJoinRequest,
+    OrganizationMembershipOut,
+    OrganizationUpdate,
+    TeacherOrganizationOut,
+)
 from app.schemas.question_list import (
     QuestionCreate,
     QuestionListCreate,
@@ -27,29 +34,114 @@ from app.schemas.submission import (
     SubmissionFeedbackOut,
     TeacherCommentUpdate,
 )
-from app.services import analytics_service, classroom_service, list_service, submission_service
+from app.schemas.topic import TopicCreate, TopicOut
+from app.services import (
+    analytics_service,
+    classroom_service,
+    list_service,
+    organization_service,
+    submission_service,
+)
 
 router = APIRouter(prefix="/teacher", tags=["teacher"])
 require_teacher = require_role("teacher")
 
 
-@router.post("/topics", response_model=classroom_service.TopicOut, status_code=status.HTTP_201_CREATED)
+@router.post("/topics", response_model=TopicOut, status_code=status.HTTP_201_CREATED)
 def create_topic(
-    payload: classroom_service.TopicCreate,
+    payload: TopicCreate,
     _: User = Depends(require_teacher),
     db: Session = Depends(get_db),
-) -> classroom_service.TopicOut:
-    """Create a new mathematics topic."""
+) -> TopicOut:
+    """Create a new subject/topic."""
     return classroom_service.create_topic(db, payload)
+
+
+@router.get("/organizations", response_model=list[TeacherOrganizationOut])
+def list_organizations(
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+) -> list[TeacherOrganizationOut]:
+    """List organizations with teacher membership status (access_code visible to owners only)."""
+    return organization_service.list_teacher_organizations(db, current_user.id)
+
+
+@router.post(
+    "/organizations",
+    response_model=TeacherOrganizationOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_organization(
+    payload: OrganizationCreate,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+) -> TeacherOrganizationOut:
+    """Create a new organization owned by the authenticated teacher."""
+    return organization_service.create_organization(db, current_user.id, payload)
+
+
+@router.patch("/organizations/{org_id}", response_model=TeacherOrganizationOut)
+def update_organization(
+    org_id: UUID,
+    payload: OrganizationUpdate,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+) -> TeacherOrganizationOut:
+    """Update an organization owned by the authenticated teacher."""
+    return organization_service.update_organization(db, org_id, current_user.id, payload)
+
+
+@router.delete("/organizations/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_organization(
+    org_id: UUID,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Delete a teacher-owned organization (detaches classrooms instead of deleting them)."""
+    organization_service.delete_organization(db, org_id, current_user.id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/organizations/{org_id}/join",
+    response_model=OrganizationMembershipOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def join_organization(
+    org_id: UUID,
+    payload: OrganizationJoinRequest | None = Body(default=None),
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+) -> OrganizationMembershipOut:
+    """Join an existing organization as an additional teacher."""
+    access_code = payload.access_code if payload else None
+    return organization_service.join_organization_as_teacher(
+        db, org_id, current_user.id, access_code=access_code
+    )
+
+
+@router.get("/organizations/{org_id}/classrooms", response_model=list[TeacherClassroomOut])
+def list_organization_classrooms(
+    org_id: UUID,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+) -> list[TeacherClassroomOut]:
+    """List classrooms within an organization where the teacher is a member."""
+    return classroom_service.list_organization_classrooms_for_teacher(
+        db, org_id, current_user.id
+    )
 
 
 @router.get("/classrooms", response_model=list[TeacherClassroomOut])
 def list_classrooms(
+    organization_id: UUID | None = Query(default=None),
     current_user: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ) -> list[TeacherClassroomOut]:
     """List classrooms created by the authenticated teacher."""
-    return classroom_service.list_teacher_classrooms(db, current_user.id)
+    return classroom_service.list_teacher_classrooms(
+        db, current_user.id, organization_id=organization_id
+    )
 
 
 @router.post("/classrooms", response_model=TeacherClassroomOut, status_code=status.HTTP_201_CREATED)
@@ -86,12 +178,20 @@ def delete_classroom(
 
 @router.get("/lists", response_model=list[TeacherListSummaryOut])
 def list_lists(
+    organization_id: UUID | None = Query(default=None),
     classroom_id: UUID | None = Query(default=None),
+    list_type: Literal["all", "classroom", "standalone"] = Query(default="all"),
     current_user: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ) -> list[TeacherListSummaryOut]:
     """List question lists created by the authenticated teacher."""
-    return list_service.list_teacher_lists(db, current_user.id, classroom_id=classroom_id)
+    return list_service.list_teacher_lists(
+        db,
+        current_user.id,
+        organization_id=organization_id,
+        classroom_id=classroom_id,
+        list_type=list_type,
+    )
 
 
 @router.post("/lists", response_model=TeacherListDetailOut, status_code=status.HTTP_201_CREATED)
@@ -100,7 +200,7 @@ def create_list(
     current_user: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ) -> TeacherListDetailOut:
-    """Create a new draft question list inside a classroom."""
+    """Create a new draft question list (classroom-attached or standalone)."""
     return list_service.create_teacher_list(db, current_user.id, payload)
 
 
@@ -121,7 +221,7 @@ def update_list(
     current_user: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ) -> TeacherListDetailOut:
-    """Update metadata or publish/unpublish a question list."""
+    """Update metadata, classification, visibility, or publication state of a question list."""
     return list_service.update_teacher_list(db, list_id, current_user.id, payload)
 
 
@@ -175,36 +275,53 @@ def delete_question(
 
 @router.get("/analytics/topics", response_model=TeacherTopicAnalyticsOut)
 def get_topic_analytics(
+    organization_id: UUID | None = Query(default=None),
     classroom_id: UUID | None = Query(default=None),
     list_id: UUID | None = Query(default=None),
+    list_type: Literal["all", "classroom", "standalone"] = Query(default="all"),
     scope: Literal["latest", "all"] = Query(default="latest"),
     current_user: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ) -> TeacherTopicAnalyticsOut:
-    """Return KPIs and topic accuracy analytics sorted from lowest to highest performance."""
+    """Return KPIs, topic accuracy analytics, and standalone list metrics."""
     return analytics_service.get_teacher_topic_analytics(
         db,
         current_user.id,
+        organization_id=organization_id,
         classroom_id=classroom_id,
         list_id=list_id,
+        list_type=list_type,
         scope=scope,
     )
 
 
 @router.get("/students", response_model=list[TeacherStudentSummaryOut])
 def list_students(
+    organization_id: UUID | None = Query(default=None),
     classroom_id: UUID | None = Query(default=None),
+    list_id: UUID | None = Query(default=None),
+    list_type: Literal["all", "classroom", "standalone"] = Query(default="all"),
     current_user: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ) -> list[TeacherStudentSummaryOut]:
-    """List students enrolled in the teacher's classrooms with performance summaries."""
-    return analytics_service.list_teacher_students(db, current_user.id, classroom_id=classroom_id)
+    """List students enrolled in teacher classrooms or participating in standalone lists."""
+    return analytics_service.list_teacher_students(
+        db,
+        current_user.id,
+        organization_id=organization_id,
+        classroom_id=classroom_id,
+        list_id=list_id,
+        list_type=list_type,
+    )
 
 
 @router.get("/students/{student_id}", response_model=TeacherStudentDetailOut)
 def get_student_detail(
     student_id: UUID,
+    organization_id: UUID | None = Query(default=None),
     classroom_id: UUID | None = Query(default=None),
+    list_id: UUID | None = Query(default=None),
+    list_type: Literal["all", "classroom", "standalone"] = Query(default="all"),
     current_user: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ) -> TeacherStudentDetailOut:
@@ -213,7 +330,10 @@ def get_student_detail(
         db,
         current_user.id,
         student_id,
+        organization_id=organization_id,
         classroom_id=classroom_id,
+        list_id=list_id,
+        list_type=list_type,
     )
 
 

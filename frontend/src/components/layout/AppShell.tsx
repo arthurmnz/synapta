@@ -3,6 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import {
   BarChart3,
   BookOpen,
+  Building2,
   ClipboardList,
   GraduationCap,
   History,
@@ -27,6 +28,11 @@ const STUDENT_NAV: NavItem[] = [
     icon: <ClipboardList className="h-4 w-4" aria-hidden="true" />,
   },
   {
+    to: '/student/organizations',
+    label: 'Organizações',
+    icon: <Building2 className="h-4 w-4" aria-hidden="true" />,
+  },
+  {
     to: '/student/classrooms',
     label: 'Turmas',
     icon: <BookOpen className="h-4 w-4" aria-hidden="true" />,
@@ -45,8 +51,13 @@ const TEACHER_NAV: NavItem[] = [
     icon: <BarChart3 className="h-4 w-4" aria-hidden="true" />,
   },
   {
+    to: '/teacher/organizations',
+    label: 'Organizações',
+    icon: <Building2 className="h-4 w-4" aria-hidden="true" />,
+  },
+  {
     to: '/teacher/classrooms',
-    label: 'Turmas e Listas',
+    label: 'Turmas e Simulados',
     icon: <BookOpen className="h-4 w-4" aria-hidden="true" />,
   },
   {
@@ -80,7 +91,9 @@ function SynaptaBrandMark() {
         <span className="block font-display text-base font-bold tracking-tight text-white">
           Synapta
         </span>
-        <span className="block text-[11px] font-medium text-slate-300">Matemática</span>
+        <span className="block text-[11px] font-medium text-slate-300">
+          Plataforma Educacional
+        </span>
       </div>
     </div>
   );

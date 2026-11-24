@@ -116,9 +116,35 @@ def test_rbac_and_authentication_enforcement(client: TestClient) -> None:
     )
     assert dup_topic.status_code == 409
 
-    # Both teacher and student can list topics
-    assert len(client.get("/api/v1/topics", headers=student["headers"]).json()) == 1
-    assert len(client.get("/api/v1/topics", headers=teacher["headers"]).json()) == 1
+    # Both teacher and student can list topics; POST /api/v1/topics is teacher-only and multidisciplinary
+    assert (
+        client.post(
+            "/api/v1/topics",
+            headers=student["headers"],
+            json={"name": "Biologia Celular"},
+        ).status_code
+        == 403
+    )
+    bio_resp = client.post(
+        "/api/v1/topics",
+        headers=teacher["headers"],
+        json={"name": "Biologia Celular", "description": "Organelas e divisão celular"},
+    )
+    assert bio_resp.status_code == 201
+    assert bio_resp.json()["slug"] == "biologia-celular"
+
+    dup_bio = client.post(
+        "/api/v1/topics",
+        headers=teacher["headers"],
+        json={"name": "biologia celular"},
+    )
+    assert dup_bio.status_code == 409
+    assert dup_bio.json()["code"] == "TOPIC_ALREADY_EXISTS"
+
+    student_topics = client.get("/api/v1/topics", headers=student["headers"]).json()
+    teacher_topics = client.get("/api/v1/topics", headers=teacher["headers"]).json()
+    assert [t["name"] for t in student_topics] == ["Biologia Celular", "Frações e Proporção"]
+    assert len(teacher_topics) == 2
 
 
 def test_settings_secret_key_min_length_and_cors_hardening(client: TestClient) -> None:

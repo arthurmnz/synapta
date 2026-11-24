@@ -23,6 +23,13 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
     password: 'Professor123!',
   },
   {
+    label: 'Professor Carlos Mendes',
+    roleLabel: 'Professor',
+    role: 'teacher',
+    email: 'carlos.mendes@synapta.edu',
+    password: 'Professor123!',
+  },
+  {
     label: 'Lucas Silva',
     roleLabel: 'Aluno',
     role: 'student',
@@ -44,10 +51,10 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
     password: 'Aluno123!',
   },
   {
-    label: 'Pedro Henrique',
+    label: 'Sofia Almeida',
     roleLabel: 'Aluno',
     role: 'student',
-    email: 'pedro@synapta.edu',
+    email: 'sofia@synapta.edu',
     password: 'Aluno123!',
   },
 ];
@@ -178,28 +185,28 @@ export function LoginPage() {
                   Synapta
                 </span>
                 <span className="block text-xs font-medium text-slate-300">
-                  Educação em Matemática
+                  Plataforma Educacional
                 </span>
               </div>
             </div>
 
             <span className="hidden sm:inline-block font-mono text-[11px] text-blue-200/80 border border-white/15 rounded px-2 py-0.5 bg-white/5">
-              f(x) · Δ &ge; 0
+              Diagnóstico Multidisciplinar
             </span>
           </div>
 
           <div className="mt-10 lg:mt-16 max-w-md">
             <h1 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-white leading-[1.15]">
-              Simulados de Matemática com diagnóstico preciso por assunto.
+              Simulados multidisciplinares com diagnóstico preciso por assunto.
             </h1>
             <p className="mt-4 text-sm sm:text-base leading-relaxed text-slate-300">
-              Alunos escolhem suas turmas, resolvem questões de múltipla escolha e recebem gabarito
-              comentado pelo professor. Docentes acompanham o rendimento por conteúdo e controlam
-              novas tentativas.
+              Organizações e professores criam turmas públicas ou privadas e simulados avulsos em
+              qualquer matéria. Alunos resolvem questões de múltipla escolha e recebem gabarito
+              comentado com análise por tema.
             </p>
           </div>
 
-          {/* Subtle mathematical coordinate sketch */}
+          {/* Multidisciplinary topic diagnostic preview */}
           <div className="mt-8 hidden sm:block max-w-md rounded-lg border border-white/10 bg-[#0F1627]/70 p-4">
             <div className="flex items-center justify-between text-[11px] font-mono text-slate-300 mb-2">
               <span>Diagnóstico por assunto</span>
@@ -207,21 +214,28 @@ export function LoginPage() {
             </div>
             <div className="space-y-2">
               <div className="flex items-center gap-3 text-xs">
-                <span className="w-28 truncate text-slate-300">Frações</span>
+                <span className="w-40 truncate text-slate-300">Biologia Celular e Genética</span>
                 <div className="flex-1 h-1.5 rounded-sm bg-white/10 overflow-hidden">
                   <div className="h-full w-[88%] bg-emerald-400" />
                 </div>
                 <span className="font-mono text-[11px] text-emerald-300 tabular-nums">88%</span>
               </div>
               <div className="flex items-center gap-3 text-xs">
-                <span className="w-28 truncate text-slate-300">Geometria</span>
+                <span className="w-40 truncate text-slate-300">História do Brasil</span>
+                <div className="flex-1 h-1.5 rounded-sm bg-white/10 overflow-hidden">
+                  <div className="h-full w-[76%] bg-emerald-400" />
+                </div>
+                <span className="font-mono text-[11px] text-emerald-300 tabular-nums">76%</span>
+              </div>
+              <div className="flex items-center gap-3 text-xs">
+                <span className="w-40 truncate text-slate-300">Interpretação de Texto</span>
                 <div className="flex-1 h-1.5 rounded-sm bg-white/10 overflow-hidden">
                   <div className="h-full w-[64%] bg-amber-400" />
                 </div>
                 <span className="font-mono text-[11px] text-amber-300 tabular-nums">64%</span>
               </div>
               <div className="flex items-center gap-3 text-xs">
-                <span className="w-28 truncate text-slate-300">Equações</span>
+                <span className="w-40 truncate text-slate-300">Equações e Álgebra</span>
                 <div className="flex-1 h-1.5 rounded-sm bg-white/10 overflow-hidden">
                   <div className="h-full w-[42%] bg-rose-400" />
                 </div>
@@ -235,9 +249,12 @@ export function LoginPage() {
           <div className="flex items-start gap-3">
             <GraduationCap className="h-5 w-5 text-blue-300 shrink-0 mt-0.5" aria-hidden="true" />
             <div>
-              <p className="text-sm font-semibold text-white">Turmas e tentativas controladas</p>
+              <p className="text-sm font-semibold text-white">
+                Organizações, turmas e simulados avulsos
+              </p>
               <p className="text-xs text-slate-300 leading-relaxed">
-                Cada tentativa é contabilizada e refazer exige autorização do professor.
+                Estruturas públicas ou protegidas por código permanente de acesso e controle de
+                tentativas.
               </p>
             </div>
           </div>

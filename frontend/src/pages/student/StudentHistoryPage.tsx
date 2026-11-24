@@ -9,6 +9,7 @@ import {
   EmptyState,
   LoadingState,
 } from '../../components/ui';
+import { ListContextBadges } from '../../components/shared/AccessBadges';
 import { AppShell } from '../../components/layout/AppShell';
 import { apiClient, ApiError } from '../../lib/apiClient';
 import {
@@ -24,7 +25,7 @@ export function StudentHistoryPage() {
   const [submissions, setSubmissions] = useState<StudentSubmissionSummaryOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [classroomFilter, setClassroomFilter] = useState('');
+  const [originFilter, setOriginFilter] = useState('');
 
   const loadHistory = useCallback(async () => {
     setLoading(true);
@@ -47,16 +48,31 @@ export function StudentHistoryPage() {
     void loadHistory();
   }, [loadHistory]);
 
+  const hasStandalone = useMemo(
+    () => submissions.some((s) => s.is_standalone || !s.classroom_id),
+    [submissions]
+  );
+
   const classroomOptions = useMemo(() => {
     const map = new Map<string, string>();
-    submissions.forEach((s) => map.set(String(s.classroom_id), s.classroom_name));
+    submissions.forEach((s) => {
+      if (s.classroom_id && s.classroom_name) {
+        const label = s.organization_name
+          ? `${s.classroom_name} (${s.organization_name})`
+          : s.classroom_name;
+        map.set(String(s.classroom_id), label);
+      }
+    });
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
   }, [submissions]);
 
   const filteredSubmissions = useMemo(() => {
-    if (!classroomFilter) return submissions;
-    return submissions.filter((s) => String(s.classroom_id) === classroomFilter);
-  }, [submissions, classroomFilter]);
+    if (!originFilter) return submissions;
+    if (originFilter === '__standalone__') {
+      return submissions.filter((s) => s.is_standalone || !s.classroom_id);
+    }
+    return submissions.filter((s) => String(s.classroom_id) === originFilter);
+  }, [submissions, originFilter]);
 
   return (
     <AppShell>
@@ -94,18 +110,19 @@ export function StudentHistoryPage() {
           </Alert>
         )}
 
-        {classroomOptions.length > 1 && (
+        {(classroomOptions.length > 0 || hasStandalone) && submissions.length > 1 && (
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-[10px] border border-[#DCE1EB] bg-white px-4 py-3 shadow-card">
             <label htmlFor="history-classroom-filter" className="text-sm font-semibold text-[#131B2E]">
-              Filtrar por turma
+              Filtrar por origem
             </label>
             <select
               id="history-classroom-filter"
-              value={classroomFilter}
-              onChange={(e) => setClassroomFilter(e.target.value)}
-              className="min-h-[44px] w-full sm:w-64 rounded-lg border border-[#CBD3E1] bg-white px-3 py-2 text-base sm:text-sm text-[#131B2E] focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
+              value={originFilter}
+              onChange={(e) => setOriginFilter(e.target.value)}
+              className="min-h-[44px] w-full sm:w-72 rounded-lg border border-[#CBD3E1] bg-white px-3 py-2 text-base sm:text-sm text-[#131B2E] focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
             >
-              <option value="">Todas as turmas</option>
+              <option value="">Todos os simulados</option>
+              {hasStandalone && <option value="__standalone__">Simulados Avulsos</option>}
               {classroomOptions.map((opt) => (
                 <option key={opt.id} value={opt.id}>
                   {opt.name}
@@ -134,7 +151,7 @@ export function StudentHistoryPage() {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="border-b border-[#DCE1EB] bg-[#F8F8F5] text-xs font-bold text-[#4B5568]">
-                    <th className="px-5 py-3.5">Simulado / Turma</th>
+                    <th className="px-5 py-3.5">Simulado / Origem</th>
                     <th className="px-5 py-3.5">Tentativa</th>
                     <th className="px-5 py-3.5">Desempenho</th>
                     <th className="px-5 py-3.5">Status</th>
@@ -148,9 +165,15 @@ export function StudentHistoryPage() {
                     const retake = formatRetakeStatus(sub.retake_status);
                     return (
                       <tr key={String(sub.submission_id)} className="hover:bg-[#F8F8F5]/70">
-                        <td className="px-5 py-4">
+                        <td className="px-5 py-4 space-y-1">
                           <p className="font-bold text-[#131B2E]">{sub.question_list_title}</p>
-                          <p className="text-xs text-[#4B5568]">{sub.classroom_name}</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            <ListContextBadges
+                              isStandalone={sub.is_standalone}
+                              classroomName={sub.classroom_name}
+                              organizationName={sub.organization_name}
+                            />
+                          </div>
                         </td>
                         <td className="px-5 py-4 tabular-nums">
                           <Badge tone="navy" className="font-mono">
@@ -180,11 +203,11 @@ export function StudentHistoryPage() {
                             ) : sub.retake_status !== 'none' ? (
                               <Badge tone={retake.tone}>{retake.label}</Badge>
                             ) : (
-                              <span className="text-xs text-slate-500">Concluída</span>
+                              <span className="text-xs text-[#4B5568]">Concluída</span>
                             )}
                           </div>
                         </td>
-                        <td className="px-5 py-4 text-xs text-slate-600 whitespace-nowrap">
+                        <td className="px-5 py-4 text-xs text-[#4B5568] whitespace-nowrap">
                           {formatDateTime(sub.submitted_at)}
                         </td>
                         <td className="px-5 py-4 text-right whitespace-nowrap">

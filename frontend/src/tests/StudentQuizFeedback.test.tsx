@@ -18,9 +18,12 @@ const STUDENT_USER = {
 const SUBMISSION_FEEDBACK: SubmissionFeedbackOut = {
   submission_id: 77,
   question_list_id: 5,
-  question_list_title: 'Simulado 01 — Equações e Frações',
+  question_list_title: 'Simulado 01 — Ciências e Exatas',
   classroom_id: 1,
-  classroom_name: '9º Ano A — Matemática',
+  classroom_name: '9º Ano A — Multidisciplinar',
+  organization_id: 10,
+  organization_name: 'Instituto Horizonte',
+  is_standalone: false,
   student_id: 2,
   student_name: 'Lucas Silva',
   student_email: 'lucas@synapta.edu',
@@ -29,8 +32,8 @@ const SUBMISSION_FEEDBACK: SubmissionFeedbackOut = {
   correct_count: 1,
   total_questions: 2,
   score_percentage: 50,
-  performance_band: 'average',
-  teacher_comment: 'Bom começo em frações. Revise o isolamento de x nas equações.',
+  performance_band: 'attention',
+  teacher_comment: 'Bom domínio de Biologia Celular. Revise o isolamento de x nas equações.',
   teacher_commented_at: '2026-11-23T12:00:00Z',
   retake_status: 'none',
   pending_retake_request_id: null,
@@ -48,7 +51,7 @@ const SUBMISSION_FEEDBACK: SubmissionFeedbackOut = {
     },
     {
       topic_id: 11,
-      topic_name: 'Frações',
+      topic_name: 'Biologia Celular',
       total_answers: 1,
       correct_answers: 1,
       wrong_answers: 0,
@@ -72,13 +75,13 @@ const SUBMISSION_FEEDBACK: SubmissionFeedbackOut = {
       question_id: 102,
       order_index: 2,
       topic_id: 11,
-      topic_name: 'Frações',
-      statement: 'Quanto é 1/2 + 1/4?',
-      options: { A: '2/4', B: '2/6', C: '3/4', D: '1/4' },
+      topic_name: 'Biologia Celular',
+      statement: 'Qual organela produz ATP na respiração aeróbica?',
+      options: { A: 'Lisossomo', B: 'Ribossomo', C: 'Mitocôndria', D: 'Peroxissomo' },
       selected_option: 'C',
       correct_option: 'C',
       is_correct: true,
-      explanation: '1/2 = 2/4, portanto 2/4 + 1/4 = 3/4.',
+      explanation: 'A mitocôndria é responsável pela respiração celular aeróbica.',
     },
   ],
 };
@@ -100,16 +103,21 @@ describe('StudentQuizFeedback', () => {
     vi.restoreAllMocks();
   });
 
-  it('permite ao aluno entrar em uma turma disponível', async () => {
+  it('permite ao aluno entrar em uma turma pública disponível', async () => {
     const user = userEvent.setup();
 
+    vi.spyOn(apiClient, 'getStudentOrganizations').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getStudentClassrooms')
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
         {
           id: 1,
-          name: '9º Ano A — Matemática',
+          name: '9º Ano A — Multidisciplinar',
           description: 'Turma regular',
+          organization_id: null,
+          organization_name: null,
+          organization_visibility: null,
+          visibility: 'public',
           teacher_name: 'Ana Paula',
           published_lists_count: 2,
           enrolled_at: '2026-11-23T10:00:00Z',
@@ -119,8 +127,12 @@ describe('StudentQuizFeedback', () => {
       .mockResolvedValueOnce([
         {
           id: 1,
-          name: '9º Ano A — Matemática',
+          name: '9º Ano A — Multidisciplinar',
           description: 'Turma regular',
+          organization_id: null,
+          organization_name: null,
+          organization_visibility: null,
+          visibility: 'public',
           teacher_name: 'Ana Paula',
           student_count: 12,
           published_lists_count: 2,
@@ -130,8 +142,12 @@ describe('StudentQuizFeedback', () => {
       .mockResolvedValueOnce([
         {
           id: 1,
-          name: '9º Ano A — Matemática',
+          name: '9º Ano A — Multidisciplinar',
           description: 'Turma regular',
+          organization_id: null,
+          organization_name: null,
+          organization_visibility: null,
+          visibility: 'public',
           teacher_name: 'Ana Paula',
           student_count: 13,
           published_lists_count: 2,
@@ -161,9 +177,14 @@ describe('StudentQuizFeedback', () => {
     vi.spyOn(apiClient, 'getStudentListDetail').mockResolvedValue({
       id: 5,
       classroom_id: 1,
-      classroom_name: '9º Ano A — Matemática',
+      classroom_name: '9º Ano A — Multidisciplinar',
+      organization_id: 10,
+      organization_name: 'Instituto Horizonte',
+      is_standalone: false,
+      visibility: 'public',
+      is_unlocked: true,
       teacher_name: 'Ana Paula',
-      title: 'Simulado 01 — Equações e Frações',
+      title: 'Simulado 01 — Ciências e Exatas',
       description: 'Avaliação diagnóstica inicial.',
       attempts_used: 0,
       next_attempt_number: 1,
@@ -182,9 +203,9 @@ describe('StudentQuizFeedback', () => {
           id: 102,
           order_index: 2,
           topic_id: 11,
-          topic_name: 'Frações',
-          statement: 'Quanto é 1/2 + 1/4?',
-          options: { A: '2/4', B: '2/6', C: '3/4', D: '1/4' },
+          topic_name: 'Biologia Celular',
+          statement: 'Qual organela produz ATP na respiração aeróbica?',
+          options: { A: 'Lisossomo', B: 'Ribossomo', C: 'Mitocôndria', D: 'Peroxissomo' },
         },
       ],
       past_submissions: [],
@@ -197,12 +218,11 @@ describe('StudentQuizFeedback', () => {
     expect(await screen.findByText(/tentativa #1/i)).toBeInTheDocument();
     expect(screen.getByText('Resolva 2x + 4 = 10.')).toBeInTheDocument();
 
-    // Mark option C on question 1 and option C on question 2
     const radioGroups = screen.getAllByRole('radiogroup');
     expect(radioGroups).toHaveLength(2);
 
     await user.click(screen.getByText('4'));
-    await user.click(screen.getByText('3/4'));
+    await user.click(screen.getByText('Mitocôndria'));
     await user.click(screen.getByRole('button', { name: /enviar simulado completo/i }));
 
     await waitFor(() => {
@@ -216,7 +236,9 @@ describe('StudentQuizFeedback', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText('Bom começo em frações. Revise o isolamento de x nas equações.')
+        screen.getByText(
+          'Bom domínio de Biologia Celular. Revise o isolamento de x nas equações.'
+        )
       ).toBeInTheDocument();
     });
     expect(screen.getByText('2x = 6, logo x = 3.')).toBeInTheDocument();
@@ -229,9 +251,14 @@ describe('StudentQuizFeedback', () => {
       .mockResolvedValueOnce({
         id: 5,
         classroom_id: 1,
-        classroom_name: '9º Ano A — Matemática',
+        classroom_name: '9º Ano A — Multidisciplinar',
+        organization_id: null,
+        organization_name: null,
+        is_standalone: false,
+        visibility: 'public',
+        is_unlocked: true,
         teacher_name: 'Ana Paula',
-        title: 'Simulado 01 — Equações e Frações',
+        title: 'Simulado 01 — Ciências e Exatas',
         description: null,
         attempts_used: 1,
         next_attempt_number: 2,
@@ -253,9 +280,14 @@ describe('StudentQuizFeedback', () => {
       .mockResolvedValueOnce({
         id: 5,
         classroom_id: 1,
-        classroom_name: '9º Ano A — Matemática',
+        classroom_name: '9º Ano A — Multidisciplinar',
+        organization_id: null,
+        organization_name: null,
+        is_standalone: false,
+        visibility: 'public',
+        is_unlocked: true,
         teacher_name: 'Ana Paula',
-        title: 'Simulado 01 — Equações e Frações',
+        title: 'Simulado 01 — Ciências e Exatas',
         description: null,
         attempts_used: 1,
         next_attempt_number: 2,
@@ -278,9 +310,12 @@ describe('StudentQuizFeedback', () => {
     vi.spyOn(apiClient, 'requestRetake').mockResolvedValue({
       id: 9,
       question_list_id: 5,
-      question_list_title: 'Simulado 01 — Equações e Frações',
+      question_list_title: 'Simulado 01 — Ciências e Exatas',
       classroom_id: 1,
-      classroom_name: '9º Ano A — Matemática',
+      classroom_name: '9º Ano A — Multidisciplinar',
+      organization_id: null,
+      organization_name: null,
+      is_standalone: false,
       student_id: 2,
       student_name: 'Lucas Silva',
       student_email: 'lucas@synapta.edu',
@@ -294,7 +329,7 @@ describe('StudentQuizFeedback', () => {
 
     renderStudentRoute('/student/lists/5');
 
-    const reasonInput = await screen.findByPlaceholderText(/revise os tópicos/i);
+    const reasonInput = await screen.findByPlaceholderText(/revise/i);
     await user.type(reasonInput, 'Revisei o conteúdo');
     await user.click(screen.getByRole('button', { name: /solicitar nova tentativa/i }));
 

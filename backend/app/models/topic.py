@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 class Topic(Base):
-    """Mathematics subject/topic used to classify questions and compute analytics."""
+    """Subject/topic across any discipline used to classify questions and compute analytics."""
 
     __tablename__ = "topics"
 

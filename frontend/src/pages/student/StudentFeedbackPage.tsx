@@ -18,6 +18,7 @@ import {
   CardHeader,
   LoadingState,
 } from '../../components/ui';
+import { ListContextBadges } from '../../components/shared/AccessBadges';
 import { TopicPerformanceChart } from '../../components/charts/TopicPerformanceChart';
 import { AppShell } from '../../components/layout/AppShell';
 import { apiClient, ApiError } from '../../lib/apiClient';
@@ -139,7 +140,11 @@ export function StudentFeedbackPage() {
               <div className="p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
                 <div className="min-w-0 space-y-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge tone="navy">{feedback.classroom_name}</Badge>
+                    <ListContextBadges
+                      isStandalone={feedback.is_standalone}
+                      classroomName={feedback.classroom_name}
+                      organizationName={feedback.organization_name}
+                    />
                     <Badge tone="primary" className="font-mono">
                       Tentativa #{feedback.attempt_number} de {feedback.attempts_used_total}
                     </Badge>

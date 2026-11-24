@@ -166,7 +166,8 @@ export function RegisterPage() {
                     <span className="font-display text-sm font-bold text-[#131B2E]">Professor</span>
                   </div>
                   <p className="mt-1.5 text-xs leading-relaxed text-[#4B5568]">
-                    Gerencia turmas e listas, analisa assuntos e autoriza novas tentativas.
+                    Gerencia organizações, turmas e simulados, analisa assuntos e autoriza
+                    tentativas.
                   </p>
                 </button>
               </div>

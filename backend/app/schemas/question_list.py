@@ -2,7 +2,10 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.core.access_codes import normalize_access_code, validate_visibility_and_code
+from app.schemas.organization import VisibilityType
 
 OptionLetter = Literal["A", "B", "C", "D"]
 RetakeStatus = Literal["none", "pending", "approved", "rejected"]
@@ -26,11 +29,14 @@ class QuestionOptions(BaseModel):
 
 
 class QuestionListCreate(BaseModel):
-    """Payload to create a draft question list in a classroom."""
+    """Payload to create a draft question list (classroom-attached or standalone)."""
 
-    classroom_id: UUID
+    is_standalone: bool = False
+    classroom_id: UUID | None = None
     title: str = Field(min_length=2, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
+    visibility: VisibilityType = "public"
+    access_code: str | None = Field(default=None, max_length=64)
 
     @field_validator("title")
     @classmethod
@@ -48,13 +54,35 @@ class QuestionListCreate(BaseModel):
         cleaned = value.strip()
         return cleaned or None
 
+    @model_validator(mode="after")
+    def validate_hierarchy_and_visibility(self) -> "QuestionListCreate":
+        if self.is_standalone:
+            if self.classroom_id is not None:
+                raise ValueError("Simulado avulso não pode estar vinculado a uma turma.")
+            if self.visibility != "public":
+                raise ValueError("Simulado avulso deve ser sempre público.")
+            self.access_code = None
+            return self
+
+        if self.classroom_id is None:
+            raise ValueError("Simulado de turma exige a seleção de uma turma (classroom_id).")
+
+        visibility, access_code = validate_visibility_and_code(self.visibility, self.access_code)
+        self.visibility = visibility  # type: ignore[assignment]
+        self.access_code = access_code
+        return self
+
 
 class QuestionListUpdate(BaseModel):
-    """Payload to update metadata or publication state of a question list."""
+    """Payload to update metadata, classification, visibility, or publication state of a list."""
 
+    is_standalone: bool | None = None
+    classroom_id: UUID | None = None
     title: str | None = Field(default=None, min_length=2, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     is_published: bool | None = None
+    visibility: VisibilityType | None = None
+    access_code: str | None = Field(default=None, max_length=64)
 
     @field_validator("title")
     @classmethod
@@ -73,6 +101,25 @@ class QuestionListUpdate(BaseModel):
             return None
         cleaned = value.strip()
         return cleaned or None
+
+    @field_validator("access_code")
+    @classmethod
+    def clean_access_code(cls, value: str | None) -> str | None:
+        return normalize_access_code(value)
+
+
+class QuestionListUnlockRequest(BaseModel):
+    """Payload containing the access code to permanently unlock a private classroom list."""
+
+    access_code: str = Field(min_length=1, max_length=64)
+
+    @field_validator("access_code")
+    @classmethod
+    def clean_access_code(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Informe o código de acesso.")
+        return cleaned
 
 
 class QuestionCreate(BaseModel):
@@ -133,8 +180,13 @@ class TeacherListSummaryOut(BaseModel):
     """Summary of a question list managed by a teacher."""
 
     id: UUID
-    classroom_id: UUID
-    classroom_name: str
+    classroom_id: UUID | None = None
+    classroom_name: str | None = None
+    organization_id: UUID | None = None
+    organization_name: str | None = None
+    is_standalone: bool
+    visibility: VisibilityType
+    access_code: str | None = None
     title: str
     description: str | None = None
     is_published: bool
@@ -175,11 +227,16 @@ class StudentPastSubmissionItemOut(BaseModel):
 
 
 class StudentListSummaryOut(BaseModel):
-    """Published question list summary visible to an enrolled student."""
+    """Published question list summary visible to a student (never exposes access_code)."""
 
     id: UUID
-    classroom_id: UUID
-    classroom_name: str
+    classroom_id: UUID | None = None
+    classroom_name: str | None = None
+    organization_id: UUID | None = None
+    organization_name: str | None = None
+    is_standalone: bool
+    visibility: VisibilityType
+    is_unlocked: bool
     teacher_name: str
     title: str
     description: str | None = None
@@ -196,8 +253,13 @@ class StudentListDetailOut(BaseModel):
     """Published question list with questions (no answer key) and attempt history."""
 
     id: UUID
-    classroom_id: UUID
-    classroom_name: str
+    classroom_id: UUID | None = None
+    classroom_name: str | None = None
+    organization_id: UUID | None = None
+    organization_name: str | None = None
+    is_standalone: bool
+    visibility: VisibilityType
+    is_unlocked: bool
     teacher_name: str
     title: str
     description: str | None = None

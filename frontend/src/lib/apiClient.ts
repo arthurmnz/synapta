@@ -3,12 +3,18 @@ import type {
   AvailableClassroomOut,
   EnrollmentOut,
   EntityId,
+  ListTypeFilter,
   LoginPayload,
+  OrganizationCreatePayload,
+  OrganizationMembershipOut,
+  OrganizationUpdatePayload,
   RegisterPayload,
   RetakeRequestOut,
   StudentClassroomOut,
   StudentListDetailOut,
+  StudentListScopeFilter,
   StudentListSummaryOut,
+  StudentOrganizationOut,
   StudentSubmissionSummaryOut,
   SubmissionFeedbackOut,
   SubmitQuizPayload,
@@ -18,6 +24,7 @@ import type {
   TeacherListDetailOut,
   TeacherListSummaryOut,
   TeacherListUpdatePayload,
+  TeacherOrganizationOut,
   TeacherQuestionCreatePayload,
   TeacherQuestionOut,
   TeacherQuestionUpdatePayload,
@@ -38,12 +45,14 @@ const API_BASE_URL = rawBaseUrl.endsWith('/') ? rawBaseUrl.slice(0, -1) : rawBas
 export class ApiError extends Error {
   status: number;
   detail: unknown;
+  code: string | null;
 
-  constructor(message: string, status: number, detail?: unknown) {
+  constructor(message: string, status: number, detail?: unknown, code: string | null = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.detail = detail;
+    this.code = code;
   }
 }
 
@@ -142,10 +151,16 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...rest,
       headers,
-      body: body !== undefined && !(body instanceof FormData) ? JSON.stringify(body) : (body as BodyInit | undefined),
+      body:
+        body !== undefined && !(body instanceof FormData)
+          ? JSON.stringify(body)
+          : (body as BodyInit | undefined),
     });
   } catch {
-    throw new ApiError('Falha de conexão com o servidor. Verifique sua rede e tente novamente.', 0);
+    throw new ApiError(
+      'Falha de conexão com o servidor. Verifique sua rede e tente novamente.',
+      0
+    );
   }
 
   if (response.status === 204) {
@@ -171,7 +186,19 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     if (response.status === 401 && !skipAuth && unauthorizedListener) {
       unauthorizedListener();
     }
-    throw new ApiError(parseErrorMessage(parsedBody, response.status), response.status, parsedBody);
+    const errorCode =
+      parsedBody &&
+      typeof parsedBody === 'object' &&
+      'code' in parsedBody &&
+      typeof (parsedBody as Record<string, unknown>).code === 'string'
+        ? (parsedBody as Record<string, string>).code
+        : null;
+    throw new ApiError(
+      parseErrorMessage(parsedBody, response.status),
+      response.status,
+      parsedBody,
+      errorCode
+    );
   }
 
   return parsedBody as T;
@@ -186,6 +213,25 @@ function buildQuery(params: Record<string, EntityId | string | undefined | null>
   });
   const qs = sp.toString();
   return qs ? `?${qs}` : '';
+}
+
+export interface TeacherListFilterParams {
+  organizationId?: EntityId | null;
+  classroomId?: EntityId | null;
+  listType?: ListTypeFilter;
+}
+
+export interface TeacherHierarchyFilterParams {
+  organizationId?: EntityId | null;
+  classroomId?: EntityId | null;
+  listId?: EntityId | null;
+  listType?: ListTypeFilter;
+}
+
+export interface StudentListFilterParams {
+  organizationId?: EntityId | null;
+  classroomId?: EntityId | null;
+  scope?: StudentListScopeFilter;
 }
 
 export const apiClient = {
@@ -220,24 +266,62 @@ export const apiClient = {
     return request<TopicOut[]>('/topics');
   },
 
-  // Student
+  // Student - Organizations & Classrooms
+  getStudentOrganizations(): Promise<StudentOrganizationOut[]> {
+    return request<StudentOrganizationOut[]>('/student/organizations');
+  },
+  joinStudentOrganization(
+    orgId: EntityId,
+    accessCode?: string | null
+  ): Promise<OrganizationMembershipOut> {
+    return request<OrganizationMembershipOut>(`/student/organizations/${orgId}/join`, {
+      method: 'POST',
+      body: accessCode ? { access_code: accessCode } : {},
+    });
+  },
+  getStudentOrganizationClassrooms(orgId: EntityId): Promise<AvailableClassroomOut[]> {
+    return request<AvailableClassroomOut[]>(`/student/organizations/${orgId}/classrooms`);
+  },
   getStudentClassrooms(): Promise<StudentClassroomOut[]> {
     return request<StudentClassroomOut[]>('/student/classrooms');
   },
-  getAvailableClassrooms(): Promise<AvailableClassroomOut[]> {
-    return request<AvailableClassroomOut[]>('/student/classrooms/available');
+  getAvailableClassrooms(organizationId?: EntityId | null): Promise<AvailableClassroomOut[]> {
+    return request<AvailableClassroomOut[]>(
+      `/student/classrooms/available${buildQuery({ organization_id: organizationId })}`
+    );
   },
-  enrollInClassroom(classroomId: EntityId): Promise<EnrollmentOut> {
+  enrollInClassroom(
+    classroomId: EntityId,
+    accessCode?: string | null
+  ): Promise<EnrollmentOut> {
     return request<EnrollmentOut>(`/student/classrooms/${classroomId}/enroll`, {
       method: 'POST',
-      body: {},
+      body: accessCode ? { access_code: accessCode } : {},
     });
   },
-  getStudentLists(classroomId?: EntityId | null): Promise<StudentListSummaryOut[]> {
-    return request<StudentListSummaryOut[]>(`/student/lists${buildQuery({ classroom_id: classroomId })}`);
+
+  // Student - Lists & Submissions
+  getStudentLists(
+    params?: StudentListFilterParams | EntityId | null
+  ): Promise<StudentListSummaryOut[]> {
+    const normalized: StudentListFilterParams =
+      params && typeof params === 'object' ? params : { classroomId: params };
+    return request<StudentListSummaryOut[]>(
+      `/student/lists${buildQuery({
+        organization_id: normalized.organizationId,
+        classroom_id: normalized.classroomId,
+        scope: normalized.scope,
+      })}`
+    );
   },
   getStudentListDetail(listId: EntityId): Promise<StudentListDetailOut> {
     return request<StudentListDetailOut>(`/student/lists/${listId}`);
+  },
+  unlockStudentList(listId: EntityId, accessCode: string): Promise<StudentListDetailOut> {
+    return request<StudentListDetailOut>(`/student/lists/${listId}/unlock`, {
+      method: 'POST',
+      body: { access_code: accessCode },
+    });
   },
   submitQuiz(listId: EntityId, payload: SubmitQuizPayload): Promise<SubmissionFeedbackOut> {
     return request<SubmissionFeedbackOut>(`/student/lists/${listId}/submit`, {
@@ -258,15 +342,58 @@ export const apiClient = {
     });
   },
 
-  // Teacher
+  // Teacher - Topics
   createTopic(payload: TopicCreatePayload): Promise<TopicOut> {
     return request<TopicOut>('/teacher/topics', {
       method: 'POST',
       body: payload,
     });
   },
-  getTeacherClassrooms(): Promise<TeacherClassroomOut[]> {
-    return request<TeacherClassroomOut[]>('/teacher/classrooms');
+
+  // Teacher - Organizations
+  getTeacherOrganizations(): Promise<TeacherOrganizationOut[]> {
+    return request<TeacherOrganizationOut[]>('/teacher/organizations');
+  },
+  createTeacherOrganization(
+    payload: OrganizationCreatePayload
+  ): Promise<TeacherOrganizationOut> {
+    return request<TeacherOrganizationOut>('/teacher/organizations', {
+      method: 'POST',
+      body: payload,
+    });
+  },
+  updateTeacherOrganization(
+    orgId: EntityId,
+    payload: OrganizationUpdatePayload
+  ): Promise<TeacherOrganizationOut> {
+    return request<TeacherOrganizationOut>(`/teacher/organizations/${orgId}`, {
+      method: 'PATCH',
+      body: payload,
+    });
+  },
+  deleteTeacherOrganization(orgId: EntityId): Promise<void> {
+    return request<void>(`/teacher/organizations/${orgId}`, {
+      method: 'DELETE',
+    });
+  },
+  joinTeacherOrganization(
+    orgId: EntityId,
+    accessCode?: string | null
+  ): Promise<OrganizationMembershipOut> {
+    return request<OrganizationMembershipOut>(`/teacher/organizations/${orgId}/join`, {
+      method: 'POST',
+      body: accessCode ? { access_code: accessCode } : {},
+    });
+  },
+  getTeacherOrganizationClassrooms(orgId: EntityId): Promise<TeacherClassroomOut[]> {
+    return request<TeacherClassroomOut[]>(`/teacher/organizations/${orgId}/classrooms`);
+  },
+
+  // Teacher - Classrooms
+  getTeacherClassrooms(organizationId?: EntityId | null): Promise<TeacherClassroomOut[]> {
+    return request<TeacherClassroomOut[]>(
+      `/teacher/classrooms${buildQuery({ organization_id: organizationId })}`
+    );
   },
   createClassroom(payload: TeacherClassroomPayload): Promise<TeacherClassroomOut> {
     return request<TeacherClassroomOut>('/teacher/classrooms', {
@@ -274,7 +401,10 @@ export const apiClient = {
       body: payload,
     });
   },
-  updateClassroom(classroomId: EntityId, payload: Partial<TeacherClassroomPayload>): Promise<TeacherClassroomOut> {
+  updateClassroom(
+    classroomId: EntityId,
+    payload: Partial<TeacherClassroomPayload>
+  ): Promise<TeacherClassroomOut> {
     return request<TeacherClassroomOut>(`/teacher/classrooms/${classroomId}`, {
       method: 'PATCH',
       body: payload,
@@ -285,8 +415,20 @@ export const apiClient = {
       method: 'DELETE',
     });
   },
-  getTeacherLists(classroomId?: EntityId | null): Promise<TeacherListSummaryOut[]> {
-    return request<TeacherListSummaryOut[]>(`/teacher/lists${buildQuery({ classroom_id: classroomId })}`);
+
+  // Teacher - Lists & Questions
+  getTeacherLists(
+    params?: TeacherListFilterParams | EntityId | null
+  ): Promise<TeacherListSummaryOut[]> {
+    const normalized: TeacherListFilterParams =
+      params && typeof params === 'object' ? params : { classroomId: params };
+    return request<TeacherListSummaryOut[]>(
+      `/teacher/lists${buildQuery({
+        organization_id: normalized.organizationId,
+        classroom_id: normalized.classroomId,
+        list_type: normalized.listType,
+      })}`
+    );
   },
   createList(payload: TeacherListCreatePayload): Promise<TeacherListDetailOut> {
     return request<TeacherListDetailOut>('/teacher/lists', {
@@ -297,7 +439,10 @@ export const apiClient = {
   getTeacherListDetail(listId: EntityId): Promise<TeacherListDetailOut> {
     return request<TeacherListDetailOut>(`/teacher/lists/${listId}`);
   },
-  updateList(listId: EntityId, payload: TeacherListUpdatePayload): Promise<TeacherListDetailOut> {
+  updateList(
+    listId: EntityId,
+    payload: TeacherListUpdatePayload
+  ): Promise<TeacherListDetailOut> {
     return request<TeacherListDetailOut>(`/teacher/lists/${listId}`, {
       method: 'PATCH',
       body: payload,
@@ -308,13 +453,19 @@ export const apiClient = {
       method: 'DELETE',
     });
   },
-  createQuestion(listId: EntityId, payload: TeacherQuestionCreatePayload): Promise<TeacherQuestionOut> {
+  createQuestion(
+    listId: EntityId,
+    payload: TeacherQuestionCreatePayload
+  ): Promise<TeacherQuestionOut> {
     return request<TeacherQuestionOut>(`/teacher/lists/${listId}/questions`, {
       method: 'POST',
       body: payload,
     });
   },
-  updateQuestion(questionId: EntityId, payload: TeacherQuestionUpdatePayload): Promise<TeacherQuestionOut> {
+  updateQuestion(
+    questionId: EntityId,
+    payload: TeacherQuestionUpdatePayload
+  ): Promise<TeacherQuestionOut> {
     return request<TeacherQuestionOut>(`/teacher/questions/${questionId}`, {
       method: 'PATCH',
       body: payload,
@@ -325,51 +476,87 @@ export const apiClient = {
       method: 'DELETE',
     });
   },
+
+  // Teacher - Analytics & Students
   getTopicAnalytics(params?: {
+    organizationId?: EntityId | null;
     classroomId?: EntityId | null;
     listId?: EntityId | null;
+    listType?: ListTypeFilter;
     scope?: AnalyticsScope;
   }): Promise<TeacherTopicAnalyticsOut> {
     return request<TeacherTopicAnalyticsOut>(
       `/teacher/analytics/topics${buildQuery({
+        organization_id: params?.organizationId,
         classroom_id: params?.classroomId,
         list_id: params?.listId,
+        list_type: params?.listType,
         scope: params?.scope ?? 'latest',
       })}`
     );
   },
-  getTeacherStudents(classroomId?: EntityId | null): Promise<TeacherStudentSummaryOut[]> {
+  getTeacherStudents(
+    params?: TeacherHierarchyFilterParams | EntityId | null
+  ): Promise<TeacherStudentSummaryOut[]> {
+    const normalized: TeacherHierarchyFilterParams =
+      params && typeof params === 'object' ? params : { classroomId: params };
     return request<TeacherStudentSummaryOut[]>(
-      `/teacher/students${buildQuery({ classroom_id: classroomId })}`
+      `/teacher/students${buildQuery({
+        organization_id: normalized.organizationId,
+        classroom_id: normalized.classroomId,
+        list_id: normalized.listId,
+        list_type: normalized.listType,
+      })}`
     );
   },
-  getTeacherStudentDetail(studentId: EntityId, classroomId?: EntityId | null): Promise<TeacherStudentDetailOut> {
+  getTeacherStudentDetail(
+    studentId: EntityId,
+    params?: TeacherHierarchyFilterParams | EntityId | null
+  ): Promise<TeacherStudentDetailOut> {
+    const normalized: TeacherHierarchyFilterParams =
+      params && typeof params === 'object' ? params : { classroomId: params };
     return request<TeacherStudentDetailOut>(
-      `/teacher/students/${studentId}${buildQuery({ classroom_id: classroomId })}`
+      `/teacher/students/${studentId}${buildQuery({
+        organization_id: normalized.organizationId,
+        classroom_id: normalized.classroomId,
+        list_id: normalized.listId,
+        list_type: normalized.listType,
+      })}`
     );
   },
   getTeacherSubmissionDetail(submissionId: EntityId): Promise<SubmissionFeedbackOut> {
     return request<SubmissionFeedbackOut>(`/teacher/submissions/${submissionId}`);
   },
-  updateSubmissionComment(submissionId: EntityId, teacherComment: string | null): Promise<SubmissionFeedbackOut> {
+  updateSubmissionComment(
+    submissionId: EntityId,
+    teacherComment: string | null
+  ): Promise<SubmissionFeedbackOut> {
     return request<SubmissionFeedbackOut>(`/teacher/submissions/${submissionId}/comment`, {
       method: 'PATCH',
       body: { teacher_comment: teacherComment },
     });
   },
-  getRetakeRequests(status: 'pending' | 'approved' | 'rejected' | '' = 'pending'): Promise<RetakeRequestOut[]> {
+  getRetakeRequests(
+    status: 'pending' | 'approved' | 'rejected' | '' = 'pending'
+  ): Promise<RetakeRequestOut[]> {
     return request<RetakeRequestOut[]>(`/teacher/retake-requests${buildQuery({ status })}`);
   },
-  decideRetakeRequest(requestId: EntityId, decision: 'approved' | 'rejected'): Promise<RetakeRequestOut> {
+  decideRetakeRequest(
+    requestId: EntityId,
+    decision: 'approved' | 'rejected'
+  ): Promise<RetakeRequestOut> {
     return request<RetakeRequestOut>(`/teacher/retake-requests/${requestId}/decide`, {
       method: 'POST',
       body: { decision },
     });
   },
   authorizeStudentRetake(listId: EntityId, studentId: EntityId): Promise<RetakeRequestOut> {
-    return request<RetakeRequestOut>(`/teacher/lists/${listId}/students/${studentId}/authorize-retake`, {
-      method: 'POST',
-      body: {},
-    });
+    return request<RetakeRequestOut>(
+      `/teacher/lists/${listId}/students/${studentId}/authorize-retake`,
+      {
+        method: 'POST',
+        body: {},
+      }
+    );
   },
 };

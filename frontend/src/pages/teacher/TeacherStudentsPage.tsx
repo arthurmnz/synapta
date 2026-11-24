@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Clock, RefreshCw, Search, Users } from 'lucide-react';
+import { ArrowRight, Building2, Clock, Layers, RefreshCw, Search, Users } from 'lucide-react';
+import { clsx } from 'clsx';
 import {
   Alert,
   Badge,
@@ -16,41 +17,92 @@ import {
   formatPercent,
   getPerformanceTierMeta,
 } from '../../lib/formatters';
-import type { TeacherClassroomOut, TeacherStudentSummaryOut } from '../../types/api';
+import type {
+  ListTypeFilter,
+  TeacherClassroomOut,
+  TeacherListSummaryOut,
+  TeacherOrganizationOut,
+  TeacherStudentSummaryOut,
+} from '../../types/api';
 
 export function TeacherStudentsPage() {
+  const [organizations, setOrganizations] = useState<TeacherOrganizationOut[]>([]);
   const [classrooms, setClassrooms] = useState<TeacherClassroomOut[]>([]);
+  const [standaloneLists, setStandaloneLists] = useState<TeacherListSummaryOut[]>([]);
   const [students, setStudents] = useState<TeacherStudentSummaryOut[]>([]);
+
+  const [listType, setListType] = useState<ListTypeFilter>('all');
+  const [selectedOrgId, setSelectedOrgId] = useState('');
   const [selectedClassroomId, setSelectedClassroomId] = useState('');
+  const [selectedListId, setSelectedListId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadStudents = useCallback(async (classroomId: string) => {
-    setLoading(true);
-    setError(null);
+  const loadMetadata = useCallback(async () => {
     try {
-      const [cls, stu] = await Promise.all([
+      const [orgs, cls, lists] = await Promise.all([
+        apiClient.getTeacherOrganizations().catch(() => [] as TeacherOrganizationOut[]),
         apiClient.getTeacherClassrooms(),
-        apiClient.getTeacherStudents(classroomId || null),
+        apiClient.getTeacherLists({ listType: 'standalone' }).catch(() => [] as TeacherListSummaryOut[]),
       ]);
+      setOrganizations(orgs.filter((o) => o.is_member));
       setClassrooms(cls);
-      setStudents(stu);
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : 'Não foi possível carregar a lista de alunos.'
-      );
-    } finally {
-      setLoading(false);
+      setStandaloneLists(lists.filter((l) => l.is_standalone));
+    } catch {
+      // Metadata errors handled on students load
     }
   }, []);
 
+  const loadStudents = useCallback(
+    async (params: {
+      listType: ListTypeFilter;
+      organizationId: string;
+      classroomId: string;
+      listId: string;
+    }) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const isStandalone = params.listType === 'standalone';
+        const data = await apiClient.getTeacherStudents({
+          listType: params.listType,
+          organizationId: isStandalone ? null : params.organizationId || null,
+          classroomId: isStandalone ? null : params.classroomId || null,
+          listId: isStandalone ? params.listId || null : null,
+        });
+        setStudents(data);
+      } catch (err) {
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : 'Não foi possível carregar a lista de alunos.'
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
-    void loadStudents(selectedClassroomId);
-  }, [loadStudents, selectedClassroomId]);
+    void loadMetadata();
+  }, [loadMetadata]);
+
+  useEffect(() => {
+    void loadStudents({
+      listType,
+      organizationId: selectedOrgId,
+      classroomId: selectedClassroomId,
+      listId: selectedListId,
+    });
+  }, [loadStudents, listType, selectedOrgId, selectedClassroomId, selectedListId]);
+
+  const visibleClassrooms = useMemo(() => {
+    if (!selectedOrgId) return classrooms;
+    return classrooms.filter((c) => String(c.organization_id) === selectedOrgId);
+  }, [classrooms, selectedOrgId]);
 
   const filteredStudents = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -69,8 +121,8 @@ export function TeacherStudentsPage() {
               Desempenho dos Alunos
             </h1>
             <p className="mt-1 text-sm text-[#4B5568]">
-              Acompanhe a evolução individual, tentativas utilizadas e média de acertos em suas
-              turmas.
+              Acompanhe a evolução individual, participação em turmas e entregas em simulados
+              avulsos.
             </p>
           </div>
           <Link to="/teacher/dashboard">
@@ -86,7 +138,14 @@ export function TeacherStudentsPage() {
                 variant="outline"
                 size="sm"
                 leftIcon={<RefreshCw className="h-3.5 w-3.5" />}
-                onClick={() => void loadStudents(selectedClassroomId)}
+                onClick={() =>
+                  void loadStudents({
+                    listType,
+                    organizationId: selectedOrgId,
+                    classroomId: selectedClassroomId,
+                    listId: selectedListId,
+                  })
+                }
               >
                 Tentar novamente
               </Button>
@@ -98,51 +157,142 @@ export function TeacherStudentsPage() {
 
         {/* Filter Bar */}
         <Card padding="sm">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
-            <div>
-              <label
-                htmlFor="students-classroom-filter"
-                className="block text-xs font-bold text-[#131B2E] mb-1.5"
-              >
-                Filtrar por turma
-              </label>
-              <select
-                id="students-classroom-filter"
-                value={selectedClassroomId}
-                onChange={(e) => setSelectedClassroomId(e.target.value)}
-                className="block min-h-[44px] w-full rounded-lg border border-[#CBD3E1] bg-white px-3 py-2 text-base sm:text-sm text-[#131B2E] focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
-              >
-                <option value="">Todas as turmas</option>
-                {classrooms.map((c) => (
-                  <option key={String(c.id)} value={String(c.id)}>
-                    {c.name} ({c.student_count} alunos)
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-end">
+              <div>
+                <span className="block text-xs font-bold text-[#131B2E] mb-1.5">
+                  Origem da participação
+                </span>
+                <div
+                  role="group"
+                  aria-label="Filtrar alunos por origem"
+                  className="grid grid-cols-3 rounded-lg border border-[#CBD3E1] bg-[#EEF1F7] p-1"
+                >
+                  {(
+                    [
+                      { value: 'all', label: 'Todos' },
+                      { value: 'classroom', label: 'De Turma' },
+                      { value: 'standalone', label: 'Avulsos' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => {
+                        setListType(opt.value);
+                        setSelectedOrgId('');
+                        setSelectedClassroomId('');
+                        setSelectedListId('');
+                      }}
+                      className={clsx(
+                        'min-h-[44px] sm:min-h-[36px] rounded-md px-2 py-1.5 text-xs font-semibold transition-colors cursor-pointer',
+                        listType === opt.value
+                          ? 'bg-white text-[#131B2E] shadow-card'
+                          : 'text-[#4B5568] hover:text-[#131B2E]'
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-            <div>
-              <label
-                htmlFor="students-search"
-                className="block text-xs font-bold text-[#131B2E] mb-1.5"
-              >
-                Buscar por nome ou e-mail
-              </label>
-              <div className="relative">
-                <Search
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400"
-                  aria-hidden="true"
-                />
-                <input
-                  id="students-search"
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Digite o nome ou e-mail do aluno..."
-                  className="block min-h-[44px] w-full rounded-lg border border-[#CBD3E1] bg-white pl-9 pr-3 py-2 text-base sm:text-sm text-[#131B2E] placeholder:text-slate-400 focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
-                />
+              <div>
+                <label
+                  htmlFor="students-search"
+                  className="block text-xs font-bold text-[#131B2E] mb-1.5"
+                >
+                  Buscar por nome ou e-mail
+                </label>
+                <div className="relative">
+                  <Search
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400"
+                    aria-hidden="true"
+                  />
+                  <input
+                    id="students-search"
+                    type="search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Digite o nome ou e-mail do aluno..."
+                    className="block min-h-[44px] w-full rounded-lg border border-[#CBD3E1] bg-white pl-9 pr-3 py-2 text-base sm:text-sm text-[#131B2E] placeholder:text-slate-400 focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
+                  />
+                </div>
               </div>
             </div>
+
+            {listType !== 'standalone' ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-[#DCE1EB] pt-3">
+                <div>
+                  <label
+                    htmlFor="students-org-filter"
+                    className="block text-xs font-bold text-[#131B2E] mb-1.5"
+                  >
+                    Filtrar por organização
+                  </label>
+                  <select
+                    id="students-org-filter"
+                    value={selectedOrgId}
+                    onChange={(e) => {
+                      setSelectedOrgId(e.target.value);
+                      setSelectedClassroomId('');
+                    }}
+                    className="block min-h-[44px] w-full rounded-lg border border-[#CBD3E1] bg-white px-3 py-2 text-base sm:text-sm text-[#131B2E] focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
+                  >
+                    <option value="">Todas as organizações</option>
+                    {organizations.map((org) => (
+                      <option key={String(org.id)} value={String(org.id)}>
+                        {org.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="students-classroom-filter"
+                    className="block text-xs font-bold text-[#131B2E] mb-1.5"
+                  >
+                    Filtrar por turma
+                  </label>
+                  <select
+                    id="students-classroom-filter"
+                    value={selectedClassroomId}
+                    onChange={(e) => setSelectedClassroomId(e.target.value)}
+                    className="block min-h-[44px] w-full rounded-lg border border-[#CBD3E1] bg-white px-3 py-2 text-base sm:text-sm text-[#131B2E] focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
+                  >
+                    <option value="">Todas as turmas ({visibleClassrooms.length})</option>
+                    {visibleClassrooms.map((c) => (
+                      <option key={String(c.id)} value={String(c.id)}>
+                        {c.name} ({c.student_count} alunos)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <div className="border-t border-[#DCE1EB] pt-3 max-w-md">
+                <label
+                  htmlFor="students-standalone-filter"
+                  className="block text-xs font-bold text-[#131B2E] mb-1.5"
+                >
+                  Filtrar por Simulado Avulso
+                </label>
+                <select
+                  id="students-standalone-filter"
+                  value={selectedListId}
+                  onChange={(e) => setSelectedListId(e.target.value)}
+                  className="block min-h-[44px] w-full rounded-lg border border-[#CBD3E1] bg-white px-3 py-2 text-base sm:text-sm text-[#131B2E] focus:border-[#1B4FD8] focus:outline-none focus:ring-2 focus:ring-[#1B4FD8]/20"
+                >
+                  <option value="">Todos os simulados avulsos</option>
+                  {standaloneLists.map((l) => (
+                    <option key={String(l.id)} value={String(l.id)}>
+                      {l.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </Card>
 
@@ -153,17 +303,20 @@ export function TeacherStudentsPage() {
             icon={<Users className="h-6 w-6" />}
             title="Nenhum aluno encontrado"
             description={
-              searchQuery || selectedClassroomId
-                ? 'Tente ajustar o filtro de turma ou o termo de busca.'
-                : 'Ainda não há alunos matriculados em suas turmas.'
+              searchQuery || selectedClassroomId || selectedOrgId || selectedListId
+                ? 'Tente ajustar os filtros aplicados ou o termo de busca.'
+                : 'Ainda não há alunos matriculados em suas turmas ou participantes em simulados avulsos.'
             }
             action={
-              searchQuery || selectedClassroomId ? (
+              searchQuery || selectedClassroomId || selectedOrgId || selectedListId || listType !== 'all' ? (
                 <Button
                   variant="outline"
                   onClick={() => {
                     setSearchQuery('');
+                    setListType('all');
+                    setSelectedOrgId('');
                     setSelectedClassroomId('');
+                    setSelectedListId('');
                   }}
                 >
                   Limpar filtros
@@ -178,7 +331,7 @@ export function TeacherStudentsPage() {
                 <thead>
                   <tr className="border-b border-[#DCE1EB] bg-[#F8F8F5] text-xs font-bold text-[#4B5568]">
                     <th className="px-5 py-3.5">Aluno</th>
-                    <th className="px-5 py-3.5">Turmas</th>
+                    <th className="px-5 py-3.5">Turmas e Origem</th>
                     <th className="px-5 py-3.5">Listas / Tentativas</th>
                     <th className="px-5 py-3.5">Média Geral</th>
                     <th className="px-5 py-3.5">Última Entrega</th>
@@ -213,9 +366,26 @@ export function TeacherStudentsPage() {
                           <div className="flex flex-wrap gap-1.5">
                             {student.classrooms.map((c) => (
                               <Badge key={String(c.id)} tone="navy">
-                                {c.name}
+                                {c.organization_name ? (
+                                  <span className="inline-flex items-center gap-1">
+                                    <Building2 className="h-3 w-3 opacity-80" aria-hidden="true" />
+                                    {c.organization_name} · {c.name}
+                                  </span>
+                                ) : (
+                                  c.name
+                                )}
                               </Badge>
                             ))}
+                            {(student.standalone_submissions_count ?? 0) > 0 && (
+                              <Badge tone="primary">
+                                <Layers className="h-3 w-3" aria-hidden="true" />
+                                Avulsos ({student.standalone_submissions_count})
+                              </Badge>
+                            )}
+                            {student.classrooms.length === 0 &&
+                              !(student.standalone_submissions_count ?? 0) && (
+                                <span className="text-xs text-[#4B5568]">Sem vínculo</span>
+                              )}
                           </div>
                         </td>
 

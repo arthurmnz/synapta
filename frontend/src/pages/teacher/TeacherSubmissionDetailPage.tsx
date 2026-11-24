@@ -21,6 +21,7 @@ import {
   CardHeader,
   LoadingState,
 } from '../../components/ui';
+import { ListContextBadges } from '../../components/shared/AccessBadges';
 import { TopicPerformanceChart } from '../../components/charts/TopicPerformanceChart';
 import { AppShell } from '../../components/layout/AppShell';
 import { apiClient, ApiError } from '../../lib/apiClient';
@@ -222,7 +223,11 @@ export function TeacherSubmissionDetailPage() {
               <div className="p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
                 <div className="space-y-2 min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge tone="navy">{submission.classroom_name}</Badge>
+                    <ListContextBadges
+                      isStandalone={submission.is_standalone}
+                      classroomName={submission.classroom_name}
+                      organizationName={submission.organization_name}
+                    />
                     <Badge tone="primary" className="font-mono">
                       Tentativa #{submission.attempt_number} de {submission.attempts_used_total}
                     </Badge>
@@ -354,7 +359,7 @@ export function TeacherSubmissionDetailPage() {
                       aria-label="Comentário manual do professor"
                       value={commentText}
                       onChange={(e) => setCommentText(e.target.value)}
-                      placeholder="Ex.: Excelente evolução em frações! Recomendo revisar a regra de sinais nas equações de 1º grau antes da próxima tentativa."
+                      placeholder="Ex.: Excelente evolução na leitura e resolução! Recomendo revisar os assuntos abaixo de 60% antes da próxima tentativa."
                       className="block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-base sm:text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#1D4ED8] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8]/20"
                     />
                     <div className="flex flex-wrap items-center gap-2">

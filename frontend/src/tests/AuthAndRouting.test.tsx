@@ -22,13 +22,21 @@ describe('AuthAndRouting', () => {
     vi.restoreAllMocks();
   });
 
-  it('redireciona visitante não autenticado para /login ao acessar rota protegida', async () => {
+  it('redireciona visitante não autenticado para /login ao acessar rota protegida e exibe copy multidisciplinar', async () => {
     renderWithRoute('/student/dashboard');
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /entrar na plataforma/i })).toBeInTheDocument();
     });
     expect(screen.getByText(/acesso rápido \(demo\)/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', {
+        name: /simulados multidisciplinares com diagnóstico preciso por assunto/i,
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByText('Biologia Celular e Genética')).toBeInTheDocument();
+    expect(screen.getByText('História do Brasil')).toBeInTheDocument();
+    expect(screen.queryByText(/educação em matemática/i)).not.toBeInTheDocument();
   });
 
   it('permite login via Acesso Rápido (Demo) de professor e redireciona para /teacher/dashboard', async () => {
@@ -45,14 +53,17 @@ describe('AuthAndRouting', () => {
         created_at: '2026-11-23T10:00:00Z',
       },
     });
+    vi.spyOn(apiClient, 'getTeacherOrganizations').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getTeacherClassrooms').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getTeacherLists').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getRetakeRequests').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getTopicAnalytics').mockResolvedValue({
       kpis: {
+        total_organizations: 1,
         total_classrooms: 2,
         total_students: 4,
         total_published_lists: 3,
+        total_standalone_lists: 1,
         total_submissions: 10,
         overall_accuracy_percentage: 72.5,
         pending_retake_requests: 0,
@@ -60,6 +71,7 @@ describe('AuthAndRouting', () => {
       topics: [],
       lowest_performing_topics: [],
       highest_performing_topics: [],
+      standalone_lists: [],
     });
 
     renderWithRoute('/login');
@@ -75,13 +87,11 @@ describe('AuthAndRouting', () => {
     });
 
     await waitFor(() => {
-      expect(
-        screen.getByRole('heading', { name: /visão analítica de matemática/i })
-      ).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /^visão analítica$/i })).toBeInTheDocument();
     });
   });
 
-  it('bloqueia acesso de aluno às rotas de professor e redireciona para /student/dashboard', async () => {
+  it('bloqueia acesso de aluno às rotas de professor (inclusive /teacher/organizations) e redireciona para /student/dashboard', async () => {
     setStoredToken('student-jwt-token');
     vi.spyOn(apiClient, 'me').mockResolvedValue({
       id: 2,
@@ -90,10 +100,11 @@ describe('AuthAndRouting', () => {
       role: 'student',
       created_at: '2026-11-23T10:00:00Z',
     });
+    vi.spyOn(apiClient, 'getStudentOrganizations').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getStudentClassrooms').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getStudentLists').mockResolvedValue([]);
 
-    renderWithRoute('/teacher/dashboard');
+    renderWithRoute('/teacher/organizations');
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /olá, lucas/i })).toBeInTheDocument();
@@ -114,6 +125,7 @@ describe('AuthAndRouting', () => {
         created_at: '2026-11-23T11:00:00Z',
       },
     });
+    vi.spyOn(apiClient, 'getStudentOrganizations').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getStudentClassrooms').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getStudentLists').mockResolvedValue([]);
 

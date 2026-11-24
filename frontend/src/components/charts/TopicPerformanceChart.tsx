@@ -61,7 +61,7 @@ export function TopicPerformanceChart({
   const chartHeight = Math.max(250, data.length * 48 + 36);
 
   return (
-    <figure className="space-y-4" aria-label="Gráfico de rendimento por assunto de Matemática">
+    <figure className="space-y-4" aria-label="Gráfico de rendimento por assunto">
       {/* Legend with shape/icon redundancy + table fallback toggle */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-4 text-xs font-medium text-[#4B5568]">

@@ -1,6 +1,6 @@
 from collections import defaultdict
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy import case, func, select
@@ -8,11 +8,13 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.exceptions import APIError
 from app.models.classroom import Classroom, ClassroomEnrollment
+from app.models.organization import Organization, OrganizationMembership
 from app.models.question_list import Question, QuestionList
 from app.models.submission import RetakeAuthorization, Submission, SubmissionAnswer
 from app.models.topic import Topic
 from app.models.user import User
 from app.schemas.analytics import (
+    StandaloneListAnalyticsOut,
     TeacherKpisOut,
     TeacherStudentDetailOut,
     TeacherStudentInfoOut,
@@ -23,85 +25,219 @@ from app.schemas.analytics import (
     TopicMetricOut,
 )
 from app.schemas.classroom import ClassroomRefOut
+from app.schemas.organization import VisibilityType
 from app.services.classroom_service import get_owned_classroom
-from app.services.submission_service import build_topic_metrics, resolve_retake_state
+from app.services.organization_service import require_organization_membership
+from app.services.submission_service import (
+    build_topic_metrics,
+    extract_list_hierarchy_meta,
+    resolve_retake_state,
+)
+
+AnalyticsListType = Literal["all", "classroom", "standalone"]
 
 
-def get_teacher_topic_analytics(
+def _validate_analytics_scope(
     db: Session,
     teacher_id: UUID,
-    classroom_id: UUID | None = None,
-    list_id: UUID | None = None,
-    scope: Literal["latest", "all"] = "latest",
-) -> TeacherTopicAnalyticsOut:
-    """Aggregate KPIs and topic accuracy metrics for a teacher across classrooms/lists."""
-    target_classroom_id = classroom_id
-    if classroom_id is not None:
-        get_owned_classroom(db, classroom_id, teacher_id)
+    organization_id: UUID | None,
+    classroom_id: UUID | None,
+    list_id: UUID | None,
+) -> tuple[Classroom | None, QuestionList | None]:
+    if organization_id is not None:
+        require_organization_membership(
+            db,
+            organization_id,
+            teacher_id,
+            allowed_roles=("owner", "teacher"),
+            error_code="FORBIDDEN_ORGANIZATION",
+            error_detail="Você não tem permissão para visualizar métricas desta organização.",
+        )
 
+    classroom: Classroom | None = None
+    if classroom_id is not None:
+        classroom = get_owned_classroom(db, classroom_id, teacher_id)
+
+    qlist: QuestionList | None = None
     if list_id is not None:
-        qlist = db.get(QuestionList, list_id)
+        qlist = db.scalar(
+            select(QuestionList)
+            .options(joinedload(QuestionList.classroom))
+            .where(QuestionList.id == list_id)
+        )
         if qlist is None:
-            raise APIError(status_code=404, detail="Lista de questões não encontrada.", code="LIST_NOT_FOUND")
+            raise APIError(
+                status_code=404, detail="Lista de questões não encontrada.", code="LIST_NOT_FOUND"
+            )
         if qlist.teacher_id != teacher_id:
             raise APIError(
                 status_code=403,
                 detail="Você não tem permissão para visualizar métricas desta lista.",
                 code="FORBIDDEN_LIST",
             )
-        if target_classroom_id is None:
+
+    return classroom, qlist
+
+
+def _apply_list_filters(
+    stmt: Any,
+    teacher_id: UUID,
+    organization_id: UUID | None,
+    classroom_id: UUID | None,
+    list_id: UUID | None,
+    list_type: AnalyticsListType,
+) -> Any:
+    stmt = stmt.where(QuestionList.teacher_id == teacher_id)
+    if list_type == "classroom":
+        stmt = stmt.where(QuestionList.is_standalone.is_(False))
+    elif list_type == "standalone":
+        stmt = stmt.where(QuestionList.is_standalone.is_(True))
+
+    if organization_id is not None:
+        stmt = stmt.where(
+            QuestionList.is_standalone.is_(False),
+            Classroom.organization_id == organization_id,
+        )
+    if classroom_id is not None:
+        stmt = stmt.where(QuestionList.classroom_id == classroom_id)
+    if list_id is not None:
+        stmt = stmt.where(QuestionList.id == list_id)
+    return stmt
+
+
+def get_teacher_topic_analytics(
+    db: Session,
+    teacher_id: UUID,
+    organization_id: UUID | None = None,
+    classroom_id: UUID | None = None,
+    list_id: UUID | None = None,
+    list_type: AnalyticsListType = "all",
+    scope: Literal["latest", "all"] = "latest",
+) -> TeacherTopicAnalyticsOut:
+    """Aggregate KPIs, topic accuracy, and standalone list metrics for a teacher."""
+    classroom, qlist = _validate_analytics_scope(
+        db, teacher_id, organization_id, classroom_id, list_id
+    )
+
+    filtering_standalone_only = list_type == "standalone" or (
+        qlist is not None and qlist.is_standalone
+    )
+    conflict_standalone_and_hierarchy = filtering_standalone_only and (
+        organization_id is not None
+        or classroom_id is not None
+        or (qlist is not None and not qlist.is_standalone)
+    )
+
+    if filtering_standalone_only or conflict_standalone_and_hierarchy:
+        scoped_classroom_ids: list[UUID] = []
+    else:
+        target_classroom_id = classroom_id
+        if target_classroom_id is None and qlist is not None and not qlist.is_standalone:
             target_classroom_id = qlist.classroom_id
 
-    classroom_stmt = select(Classroom.id).where(Classroom.teacher_id == teacher_id)
-    if target_classroom_id is not None:
-        classroom_stmt = classroom_stmt.where(Classroom.id == target_classroom_id)
-    scoped_classroom_ids = list(db.scalars(classroom_stmt).all())
+        classroom_stmt = select(Classroom.id).where(Classroom.teacher_id == teacher_id)
+        if organization_id is not None:
+            classroom_stmt = classroom_stmt.where(Classroom.organization_id == organization_id)
+        if target_classroom_id is not None:
+            classroom_stmt = classroom_stmt.where(Classroom.id == target_classroom_id)
+        scoped_classroom_ids = list(db.scalars(classroom_stmt).all())
 
-    if scoped_classroom_ids:
-        total_students = int(
+    if filtering_standalone_only or conflict_standalone_and_hierarchy:
+        total_organizations = 0
+    elif organization_id is not None:
+        total_organizations = 1
+    elif classroom is not None:
+        total_organizations = 1 if classroom.organization_id is not None else 0
+    elif qlist is not None and qlist.classroom is not None:
+        total_organizations = 1 if qlist.classroom.organization_id is not None else 0
+    else:
+        total_organizations = int(
             db.scalar(
-                select(func.count(func.distinct(ClassroomEnrollment.student_id))).where(
-                    ClassroomEnrollment.classroom_id.in_(scoped_classroom_ids)
+                select(func.count(OrganizationMembership.id)).where(
+                    OrganizationMembership.user_id == teacher_id,
+                    OrganizationMembership.member_role.in_(["owner", "teacher"]),
                 )
             )
             or 0
         )
-    else:
-        total_students = 0
 
-    published_stmt = select(func.count(QuestionList.id)).where(
-        QuestionList.teacher_id == teacher_id,
-        QuestionList.is_published.is_(True),
+    student_ids_set: set[UUID] = set()
+    if scoped_classroom_ids:
+        student_ids_set.update(
+            db.scalars(
+                select(ClassroomEnrollment.student_id).where(
+                    ClassroomEnrollment.classroom_id.in_(scoped_classroom_ids)
+                )
+            ).all()
+        )
+    if (
+        list_type in ("all", "standalone")
+        and organization_id is None
+        and classroom_id is None
+        and (qlist is None or qlist.is_standalone)
+    ):
+        standalone_student_stmt = (
+            select(Submission.student_id)
+            .join(QuestionList, QuestionList.id == Submission.question_list_id)
+            .where(
+                QuestionList.teacher_id == teacher_id,
+                QuestionList.is_standalone.is_(True),
+            )
+        )
+        if list_id is not None:
+            standalone_student_stmt = standalone_student_stmt.where(QuestionList.id == list_id)
+        student_ids_set.update(db.scalars(standalone_student_stmt).all())
+
+    total_students = len(student_ids_set)
+
+    published_stmt = _apply_list_filters(
+        select(func.count(QuestionList.id))
+        .outerjoin(Classroom, Classroom.id == QuestionList.classroom_id)
+        .where(QuestionList.is_published.is_(True)),
+        teacher_id,
+        organization_id,
+        classroom_id,
+        list_id,
+        list_type,
     )
-    submissions_count_stmt = (
+    standalone_count_stmt = _apply_list_filters(
+        select(func.count(QuestionList.id))
+        .outerjoin(Classroom, Classroom.id == QuestionList.classroom_id)
+        .where(QuestionList.is_published.is_(True), QuestionList.is_standalone.is_(True)),
+        teacher_id,
+        organization_id,
+        classroom_id,
+        list_id,
+        list_type,
+    )
+    submissions_count_stmt = _apply_list_filters(
         select(func.count(Submission.id))
         .join(QuestionList, QuestionList.id == Submission.question_list_id)
-        .where(QuestionList.teacher_id == teacher_id)
+        .outerjoin(Classroom, Classroom.id == QuestionList.classroom_id),
+        teacher_id,
+        organization_id,
+        classroom_id,
+        list_id,
+        list_type,
     )
-    pending_retake_stmt = (
+    pending_retake_stmt = _apply_list_filters(
         select(func.count(RetakeAuthorization.id))
         .join(QuestionList, QuestionList.id == RetakeAuthorization.question_list_id)
-        .where(
-            QuestionList.teacher_id == teacher_id,
-            RetakeAuthorization.status == "pending",
-        )
+        .outerjoin(Classroom, Classroom.id == QuestionList.classroom_id)
+        .where(RetakeAuthorization.status == "pending"),
+        teacher_id,
+        organization_id,
+        classroom_id,
+        list_id,
+        list_type,
     )
 
-    if classroom_id is not None:
-        published_stmt = published_stmt.where(QuestionList.classroom_id == classroom_id)
-        submissions_count_stmt = submissions_count_stmt.where(QuestionList.classroom_id == classroom_id)
-        pending_retake_stmt = pending_retake_stmt.where(QuestionList.classroom_id == classroom_id)
-
-    if list_id is not None:
-        published_stmt = published_stmt.where(QuestionList.id == list_id)
-        submissions_count_stmt = submissions_count_stmt.where(QuestionList.id == list_id)
-        pending_retake_stmt = pending_retake_stmt.where(QuestionList.id == list_id)
-
     total_published_lists = int(db.scalar(published_stmt) or 0)
+    total_standalone_lists = int(db.scalar(standalone_count_stmt) or 0)
     total_submissions = int(db.scalar(submissions_count_stmt) or 0)
     pending_retake_requests = int(db.scalar(pending_retake_stmt) or 0)
 
-    ranked_subs = (
+    ranked_subs = _apply_list_filters(
         select(
             Submission.id.label("submission_id"),
             func.row_number()
@@ -112,12 +248,13 @@ def get_teacher_topic_analytics(
             .label("rn"),
         )
         .join(QuestionList, QuestionList.id == Submission.question_list_id)
-        .where(QuestionList.teacher_id == teacher_id)
+        .outerjoin(Classroom, Classroom.id == QuestionList.classroom_id),
+        teacher_id,
+        organization_id,
+        classroom_id,
+        list_id,
+        list_type,
     )
-    if classroom_id is not None:
-        ranked_subs = ranked_subs.where(QuestionList.classroom_id == classroom_id)
-    if list_id is not None:
-        ranked_subs = ranked_subs.where(QuestionList.id == list_id)
 
     ranked_subquery = ranked_subs.subquery()
     scoped_sub_ids = select(ranked_subquery.c.submission_id)
@@ -173,11 +310,76 @@ def get_teacher_topic_analytics(
 
     overall_accuracy = round((grand_correct / grand_total) * 100.0, 2) if grand_total > 0 else 0.0
 
+    standalone_lists_out: list[StandaloneListAnalyticsOut] = []
+    if (
+        list_type in ("all", "standalone")
+        and organization_id is None
+        and classroom_id is None
+        and (qlist is None or qlist.is_standalone)
+    ):
+        standalone_stmt = (
+            select(QuestionList)
+            .where(
+                QuestionList.teacher_id == teacher_id,
+                QuestionList.is_standalone.is_(True),
+                QuestionList.is_published.is_(True),
+            )
+            .order_by(QuestionList.title.asc())
+        )
+        if list_id is not None:
+            standalone_stmt = standalone_stmt.where(QuestionList.id == list_id)
+
+        standalone_lists = db.scalars(standalone_stmt).all()
+        if standalone_lists:
+            standalone_ids = [item.id for item in standalone_lists]
+            standalone_subs = db.scalars(
+                select(Submission)
+                .where(Submission.question_list_id.in_(standalone_ids))
+                .order_by(Submission.attempt_number.desc())
+            ).all()
+            subs_by_standalone: dict[UUID, list[Submission]] = defaultdict(list)
+            for sub in standalone_subs:
+                subs_by_standalone[sub.question_list_id].append(sub)
+
+            for item in standalone_lists:
+                item_subs = subs_by_standalone[item.id]
+                distinct_students = {sub.student_id for sub in item_subs}
+                if scope == "latest":
+                    latest_per_student: dict[UUID, Submission] = {}
+                    for sub in item_subs:
+                        existing = latest_per_student.get(sub.student_id)
+                        if existing is None or sub.attempt_number > existing.attempt_number:
+                            latest_per_student[sub.student_id] = sub
+                    scored_subs = list(latest_per_student.values())
+                else:
+                    scored_subs = item_subs
+
+                avg_score = (
+                    round(
+                        sum(float(sub.score_percentage) for sub in scored_subs) / len(scored_subs),
+                        2,
+                    )
+                    if scored_subs
+                    else 0.0
+                )
+                standalone_lists_out.append(
+                    StandaloneListAnalyticsOut(
+                        list_id=item.id,
+                        title=item.title,
+                        submissions_count=len(item_subs),
+                        distinct_students_count=len(distinct_students),
+                        average_score_percentage=avg_score,
+                    )
+                )
+            standalone_lists_out.sort(key=lambda row: (-row.submissions_count, row.title.lower()))
+
     return TeacherTopicAnalyticsOut(
         kpis=TeacherKpisOut(
+            total_organizations=total_organizations,
             total_classrooms=len(scoped_classroom_ids),
             total_students=total_students,
             total_published_lists=total_published_lists,
+            total_standalone_lists=total_standalone_lists,
             total_submissions=total_submissions,
             overall_accuracy_percentage=overall_accuracy,
             pending_retake_requests=pending_retake_requests,
@@ -185,77 +387,133 @@ def get_teacher_topic_analytics(
         topics=topics,
         lowest_performing_topics=lowest_performing,
         highest_performing_topics=highest_performing,
+        standalone_lists=standalone_lists_out,
     )
 
 
 def list_teacher_students(
     db: Session,
     teacher_id: UUID,
+    organization_id: UUID | None = None,
     classroom_id: UUID | None = None,
+    list_id: UUID | None = None,
+    list_type: AnalyticsListType = "all",
 ) -> list[TeacherStudentSummaryOut]:
-    """List students enrolled in the teacher's classrooms with summary performance stats."""
-    if classroom_id is not None:
-        get_owned_classroom(db, classroom_id, teacher_id)
-
-    enrollment_stmt = (
-        select(User, Classroom)
-        .join(ClassroomEnrollment, ClassroomEnrollment.student_id == User.id)
-        .join(Classroom, Classroom.id == ClassroomEnrollment.classroom_id)
-        .where(Classroom.teacher_id == teacher_id, User.role == "student")
-        .order_by(User.name.asc(), Classroom.name.asc())
+    """List students enrolled in teacher classrooms or participating in teacher standalone lists."""
+    _, qlist = _validate_analytics_scope(
+        db, teacher_id, organization_id, classroom_id, list_id
     )
-    if classroom_id is not None:
-        enrollment_stmt = enrollment_stmt.where(Classroom.id == classroom_id)
-
-    enrollment_rows = db.execute(enrollment_stmt).all()
-    if not enrollment_rows:
-        return []
 
     students_map: dict[UUID, User] = {}
     classrooms_by_student: dict[UUID, list[ClassroomRefOut]] = defaultdict(list)
-    for student, classroom in enrollment_rows:
-        students_map[student.id] = student
-        classrooms_by_student[student.id].append(ClassroomRefOut(id=classroom.id, name=classroom.name))
+
+    include_classroom_students = list_type != "standalone" and (
+        qlist is None or not qlist.is_standalone
+    )
+    if include_classroom_students:
+        target_classroom_id = classroom_id
+        if target_classroom_id is None and qlist is not None and not qlist.is_standalone:
+            target_classroom_id = qlist.classroom_id
+
+        enrollment_stmt = (
+            select(User, Classroom, Organization.name.label("organization_name"))
+            .join(ClassroomEnrollment, ClassroomEnrollment.student_id == User.id)
+            .join(Classroom, Classroom.id == ClassroomEnrollment.classroom_id)
+            .outerjoin(Organization, Organization.id == Classroom.organization_id)
+            .where(Classroom.teacher_id == teacher_id, User.role == "student")
+            .order_by(User.name.asc(), Classroom.name.asc())
+        )
+        if organization_id is not None:
+            enrollment_stmt = enrollment_stmt.where(Classroom.organization_id == organization_id)
+        if target_classroom_id is not None:
+            enrollment_stmt = enrollment_stmt.where(Classroom.id == target_classroom_id)
+
+        for student, classroom_obj, org_name in db.execute(enrollment_stmt).all():
+            students_map[student.id] = student
+            vis: VisibilityType = classroom_obj.visibility  # type: ignore[assignment]
+            classrooms_by_student[student.id].append(
+                ClassroomRefOut(
+                    id=classroom_obj.id,
+                    name=classroom_obj.name,
+                    organization_id=classroom_obj.organization_id,
+                    organization_name=org_name,
+                    visibility=vis,
+                )
+            )
+
+    include_standalone_students = (
+        list_type in ("all", "standalone")
+        and organization_id is None
+        and classroom_id is None
+        and (qlist is None or qlist.is_standalone)
+    )
+    if include_standalone_students:
+        standalone_stmt = (
+            select(User)
+            .join(Submission, Submission.student_id == User.id)
+            .join(QuestionList, QuestionList.id == Submission.question_list_id)
+            .where(
+                QuestionList.teacher_id == teacher_id,
+                QuestionList.is_standalone.is_(True),
+                User.role == "student",
+            )
+            .distinct()
+        )
+        if list_id is not None:
+            standalone_stmt = standalone_stmt.where(QuestionList.id == list_id)
+        for student in db.scalars(standalone_stmt).all():
+            students_map.setdefault(student.id, student)
+
+    if not students_map:
+        return []
 
     student_ids = list(students_map.keys())
 
-    sub_stmt = (
+    sub_stmt = _apply_list_filters(
         select(Submission)
         .join(QuestionList, QuestionList.id == Submission.question_list_id)
-        .where(
-            QuestionList.teacher_id == teacher_id,
-            Submission.student_id.in_(student_ids),
-        )
-        .order_by(Submission.attempt_number.desc())
+        .outerjoin(Classroom, Classroom.id == QuestionList.classroom_id)
+        .options(joinedload(Submission.question_list))
+        .where(Submission.student_id.in_(student_ids))
+        .order_by(Submission.attempt_number.desc()),
+        teacher_id,
+        organization_id,
+        classroom_id,
+        list_id,
+        list_type,
     )
-    if classroom_id is not None:
-        sub_stmt = sub_stmt.where(QuestionList.classroom_id == classroom_id)
-
-    submissions = db.scalars(sub_stmt).all()
+    submissions = db.scalars(sub_stmt).unique().all()
     subs_by_student: dict[UUID, list[Submission]] = defaultdict(list)
     for sub in submissions:
         subs_by_student[sub.student_id].append(sub)
 
-    pending_stmt = (
+    pending_stmt = _apply_list_filters(
         select(RetakeAuthorization.student_id)
         .join(QuestionList, QuestionList.id == RetakeAuthorization.question_list_id)
+        .outerjoin(Classroom, Classroom.id == QuestionList.classroom_id)
         .where(
-            QuestionList.teacher_id == teacher_id,
             RetakeAuthorization.student_id.in_(student_ids),
             RetakeAuthorization.status == "pending",
-        )
+        ),
+        teacher_id,
+        organization_id,
+        classroom_id,
+        list_id,
+        list_type,
     )
-    if classroom_id is not None:
-        pending_stmt = pending_stmt.where(QuestionList.classroom_id == classroom_id)
     pending_student_ids = set(db.scalars(pending_stmt).all())
 
     results: list[TeacherStudentSummaryOut] = []
-    for student_id, student in students_map.items():
-        student_subs = subs_by_student[student_id]
+    ordered_students = sorted(students_map.values(), key=lambda s: s.name.lower())
+    for student in ordered_students:
+        student_subs = subs_by_student[student.id]
         latest_by_list: dict[UUID, Submission] = {}
         last_submitted_at: datetime | None = None
+        standalone_submissions_count = 0
 
         for sub in student_subs:
+            if sub.question_list.is_standalone:
+                standalone_submissions_count += 1
             existing = latest_by_list.get(sub.question_list_id)
             if existing is None or sub.attempt_number > existing.attempt_number:
                 latest_by_list[sub.question_list_id] = sub
@@ -265,7 +523,8 @@ def list_teacher_students(
         avg_score: float | None = None
         if latest_by_list:
             avg_score = round(
-                sum(float(sub.score_percentage) for sub in latest_by_list.values()) / len(latest_by_list),
+                sum(float(sub.score_percentage) for sub in latest_by_list.values())
+                / len(latest_by_list),
                 2,
             )
 
@@ -274,12 +533,13 @@ def list_teacher_students(
                 student_id=student.id,
                 name=student.name,
                 email=student.email,
-                classrooms=classrooms_by_student[student_id],
+                classrooms=classrooms_by_student[student.id],
                 lists_completed_count=len(latest_by_list),
                 total_attempts_count=len(student_subs),
+                standalone_submissions_count=standalone_submissions_count,
                 average_score_percentage=avg_score,
                 last_submitted_at=last_submitted_at,
-                has_pending_retake=student_id in pending_student_ids,
+                has_pending_retake=student.id in pending_student_ids,
             )
         )
 
@@ -290,57 +550,76 @@ def get_teacher_student_detail(
     db: Session,
     teacher_id: UUID,
     student_id: UUID,
+    organization_id: UUID | None = None,
     classroom_id: UUID | None = None,
+    list_id: UUID | None = None,
+    list_type: AnalyticsListType = "all",
 ) -> TeacherStudentDetailOut:
     """Build an individual student's detailed performance report scoped to a teacher."""
-    if classroom_id is not None:
-        get_owned_classroom(db, classroom_id, teacher_id)
+    _, qlist = _validate_analytics_scope(
+        db, teacher_id, organization_id, classroom_id, list_id
+    )
 
     student = db.get(User, student_id)
     if student is None or student.role != "student":
         raise APIError(status_code=404, detail="Aluno não encontrado.", code="STUDENT_NOT_FOUND")
 
-    classroom_stmt = (
-        select(Classroom)
-        .join(ClassroomEnrollment, ClassroomEnrollment.classroom_id == Classroom.id)
-        .where(
-            Classroom.teacher_id == teacher_id,
-            ClassroomEnrollment.student_id == student_id,
+    enrolled_classrooms: list[Classroom] = []
+    if list_type != "standalone" and (qlist is None or not qlist.is_standalone):
+        classroom_stmt = (
+            select(Classroom)
+            .join(ClassroomEnrollment, ClassroomEnrollment.classroom_id == Classroom.id)
+            .options(joinedload(Classroom.organization))
+            .where(
+                Classroom.teacher_id == teacher_id,
+                ClassroomEnrollment.student_id == student_id,
+            )
+            .order_by(Classroom.name.asc())
         )
-        .order_by(Classroom.name.asc())
-    )
-    if classroom_id is not None:
-        classroom_stmt = classroom_stmt.where(Classroom.id == classroom_id)
+        if organization_id is not None:
+            classroom_stmt = classroom_stmt.where(Classroom.organization_id == organization_id)
+        if classroom_id is not None:
+            classroom_stmt = classroom_stmt.where(Classroom.id == classroom_id)
+        elif qlist is not None and not qlist.is_standalone:
+            classroom_stmt = classroom_stmt.where(Classroom.id == qlist.classroom_id)
+        enrolled_classrooms = list(db.scalars(classroom_stmt).all())
 
-    enrolled_classrooms = db.scalars(classroom_stmt).all()
-    if not enrolled_classrooms:
-        raise APIError(
-            status_code=404,
-            detail="Aluno não está matriculado em nenhuma turma selecionada.",
-            code="STUDENT_NOT_ENROLLED",
-        )
-
-    sub_stmt = (
+    sub_stmt = _apply_list_filters(
         select(Submission)
         .join(QuestionList, QuestionList.id == Submission.question_list_id)
+        .outerjoin(Classroom, Classroom.id == QuestionList.classroom_id)
         .options(
-            joinedload(Submission.question_list).joinedload(QuestionList.classroom),
-            joinedload(Submission.answers).joinedload(SubmissionAnswer.question).joinedload(Question.topic),
+            joinedload(Submission.question_list)
+            .joinedload(QuestionList.classroom)
+            .joinedload(Classroom.organization),
+            joinedload(Submission.answers)
+            .joinedload(SubmissionAnswer.question)
+            .joinedload(Question.topic),
         )
-        .where(
-            QuestionList.teacher_id == teacher_id,
-            Submission.student_id == student_id,
-        )
-        .order_by(Submission.submitted_at.desc(), Submission.attempt_number.desc())
+        .where(Submission.student_id == student_id)
+        .order_by(Submission.submitted_at.desc(), Submission.attempt_number.desc()),
+        teacher_id,
+        organization_id,
+        classroom_id,
+        list_id,
+        list_type,
     )
-    if classroom_id is not None:
-        sub_stmt = sub_stmt.where(QuestionList.classroom_id == classroom_id)
 
     submissions = db.scalars(sub_stmt).unique().all()
 
+    if not enrolled_classrooms and not submissions:
+        raise APIError(
+            status_code=404,
+            detail="Aluno não possui vínculo ou submissões nos critérios selecionados.",
+            code="STUDENT_NOT_ENROLLED",
+        )
+
     latest_by_list: dict[UUID, Submission] = {}
     attempts_count_by_list: dict[UUID, int] = defaultdict(int)
+    standalone_submissions_count = 0
     for sub in submissions:
+        if sub.question_list.is_standalone:
+            standalone_submissions_count += 1
         attempts_count_by_list[sub.question_list_id] += 1
         existing = latest_by_list.get(sub.question_list_id)
         if existing is None or sub.attempt_number > existing.attempt_number:
@@ -363,7 +642,11 @@ def get_teacher_student_detail(
     )
 
     avg_score: float | None = (
-        round(sum(float(sub.score_percentage) for sub in latest_by_list.values()) / len(latest_by_list), 2)
+        round(
+            sum(float(sub.score_percentage) for sub in latest_by_list.values())
+            / len(latest_by_list),
+            2,
+        )
         if latest_by_list
         else None
     )
@@ -382,17 +665,21 @@ def get_teacher_student_detail(
 
     submission_items: list[TeacherStudentSubmissionItemOut] = []
     for sub in submissions:
-        qlist = sub.question_list
-        retake_status, pending_id = resolve_retake_state(retakes_by_list[qlist.id])
+        qlist_obj = sub.question_list
+        hierarchy = extract_list_hierarchy_meta(qlist_obj)
+        retake_status, pending_id = resolve_retake_state(retakes_by_list[qlist_obj.id])
         submission_items.append(
             TeacherStudentSubmissionItemOut(
                 submission_id=sub.id,
-                question_list_id=qlist.id,
-                question_list_title=qlist.title,
-                classroom_id=qlist.classroom.id,
-                classroom_name=qlist.classroom.name,
+                question_list_id=qlist_obj.id,
+                question_list_title=qlist_obj.title,
+                classroom_id=hierarchy["classroom_id"],
+                classroom_name=hierarchy["classroom_name"],
+                organization_id=hierarchy["organization_id"],
+                organization_name=hierarchy["organization_name"],
+                is_standalone=hierarchy["is_standalone"],
                 attempt_number=sub.attempt_number,
-                attempts_on_list=attempts_count_by_list[qlist.id],
+                attempts_on_list=attempts_count_by_list[qlist_obj.id],
                 correct_count=sub.correct_count,
                 total_questions=sub.total_questions,
                 score_percentage=float(sub.score_percentage),
@@ -409,12 +696,22 @@ def get_teacher_student_detail(
             id=student.id,
             name=student.name,
             email=student.email,
-            classrooms=[ClassroomRefOut(id=c.id, name=c.name) for c in enrolled_classrooms],
+            classrooms=[
+                ClassroomRefOut(
+                    id=c.id,
+                    name=c.name,
+                    organization_id=c.organization_id,
+                    organization_name=c.organization.name if c.organization else None,
+                    visibility=c.visibility,  # type: ignore[arg-type]
+                )
+                for c in enrolled_classrooms
+            ],
         ),
         summary=TeacherStudentProfileSummaryOut(
             average_score_percentage=avg_score,
             lists_completed_count=len(latest_by_list),
             total_attempts_count=len(submissions),
+            standalone_submissions_count=standalone_submissions_count,
             strongest_topic=strongest_topic,
             weakest_topic=weakest_topic,
         ),

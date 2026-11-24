@@ -32,14 +32,35 @@ describe('TeacherDashboard', () => {
     vi.restoreAllMocks();
   });
 
-  it('renderiza KPIs, destaques de menor e maior rendimento por assunto e autoriza retake pendente', async () => {
+  it('renderiza KPIs, destaques por assunto, simulados avulsos e autoriza retake pendente', async () => {
     const user = userEvent.setup();
 
+    vi.spyOn(apiClient, 'getTeacherOrganizations').mockResolvedValue([
+      {
+        id: 10,
+        name: 'Instituto Horizonte',
+        description: 'Rede multidisciplinar',
+        visibility: 'public',
+        is_owner: true,
+        is_member: true,
+        access_code: null,
+        owner_id: 1,
+        owner_name: 'Ana Paula',
+        teacher_count: 2,
+        classroom_count: 1,
+        student_count: 15,
+        created_at: '2026-11-20T10:00:00Z',
+      },
+    ]);
     vi.spyOn(apiClient, 'getTeacherClassrooms').mockResolvedValue([
       {
         id: 1,
-        name: '9º Ano A',
+        name: '2º Ano A — Ciências',
         description: 'Turma manhã',
+        organization_id: 10,
+        organization_name: 'Instituto Horizonte',
+        visibility: 'public',
+        access_code: null,
         student_count: 15,
         list_count: 2,
         created_at: '2026-11-20T10:00:00Z',
@@ -49,7 +70,12 @@ describe('TeacherDashboard', () => {
       {
         id: 5,
         classroom_id: 1,
-        classroom_name: '9º Ano A',
+        classroom_name: '2º Ano A — Ciências',
+        organization_id: 10,
+        organization_name: 'Instituto Horizonte',
+        is_standalone: false,
+        visibility: 'public',
+        access_code: null,
         title: 'Simulado 01',
         description: null,
         is_published: true,
@@ -58,6 +84,23 @@ describe('TeacherDashboard', () => {
         created_at: '2026-11-20T10:00:00Z',
         updated_at: '2026-11-20T10:00:00Z',
       },
+      {
+        id: 9,
+        classroom_id: null,
+        classroom_name: null,
+        organization_id: null,
+        organization_name: null,
+        is_standalone: true,
+        visibility: 'public',
+        access_code: null,
+        title: 'Maratona Aberta de Conhecimentos Gerais',
+        description: 'Aberta para todos os alunos',
+        is_published: true,
+        question_count: 6,
+        submission_count: 14,
+        created_at: '2026-11-21T10:00:00Z',
+        updated_at: '2026-11-21T10:00:00Z',
+      },
     ]);
     vi.spyOn(apiClient, 'getRetakeRequests').mockResolvedValue([
       {
@@ -65,31 +108,36 @@ describe('TeacherDashboard', () => {
         question_list_id: 5,
         question_list_title: 'Simulado 01',
         classroom_id: 1,
-        classroom_name: '9º Ano A',
+        classroom_name: '2º Ano A — Ciências',
+        organization_id: 10,
+        organization_name: 'Instituto Horizonte',
+        is_standalone: false,
         student_id: 2,
         student_name: 'Lucas Silva',
         student_email: 'lucas@synapta.edu',
         attempts_used: 1,
         last_score_percentage: 40,
         status: 'pending',
-        request_reason: 'Quero tentar melhorar minha nota em funções.',
+        request_reason: 'Quero tentar melhorar minha nota em genética.',
         created_at: '2026-11-23T11:00:00Z',
         reviewed_at: null,
       },
     ]);
-    vi.spyOn(apiClient, 'getTopicAnalytics').mockResolvedValue({
+    const analyticsSpy = vi.spyOn(apiClient, 'getTopicAnalytics').mockResolvedValue({
       kpis: {
+        total_organizations: 1,
         total_classrooms: 1,
         total_students: 15,
-        total_published_lists: 1,
-        total_submissions: 10,
+        total_published_lists: 2,
+        total_standalone_lists: 1,
+        total_submissions: 24,
         overall_accuracy_percentage: 64.5,
         pending_retake_requests: 1,
       },
       topics: [
         {
           topic_id: 10,
-          topic_name: 'Funções Quadráticas',
+          topic_name: 'Biologia Celular e Genética',
           total_answers: 20,
           correct_answers: 7,
           wrong_answers: 13,
@@ -97,7 +145,7 @@ describe('TeacherDashboard', () => {
         },
         {
           topic_id: 11,
-          topic_name: 'Frações e Porcentagem',
+          topic_name: 'História do Brasil',
           total_answers: 20,
           correct_answers: 18,
           wrong_answers: 2,
@@ -107,7 +155,7 @@ describe('TeacherDashboard', () => {
       lowest_performing_topics: [
         {
           topic_id: 10,
-          topic_name: 'Funções Quadráticas',
+          topic_name: 'Biologia Celular e Genética',
           total_answers: 20,
           correct_answers: 7,
           wrong_answers: 13,
@@ -117,11 +165,20 @@ describe('TeacherDashboard', () => {
       highest_performing_topics: [
         {
           topic_id: 11,
-          topic_name: 'Frações e Porcentagem',
+          topic_name: 'História do Brasil',
           total_answers: 20,
           correct_answers: 18,
           wrong_answers: 2,
           accuracy_percentage: 90,
+        },
+      ],
+      standalone_lists: [
+        {
+          list_id: 9,
+          title: 'Maratona Aberta de Conhecimentos Gerais',
+          submissions_count: 14,
+          distinct_students_count: 12,
+          average_score_percentage: 78.5,
         },
       ],
     });
@@ -131,14 +188,17 @@ describe('TeacherDashboard', () => {
       question_list_id: 5,
       question_list_title: 'Simulado 01',
       classroom_id: 1,
-      classroom_name: '9º Ano A',
+      classroom_name: '2º Ano A — Ciências',
+      organization_id: 10,
+      organization_name: 'Instituto Horizonte',
+      is_standalone: false,
       student_id: 2,
       student_name: 'Lucas Silva',
       student_email: 'lucas@synapta.edu',
       attempts_used: 1,
       last_score_percentage: 40,
       status: 'approved',
-      request_reason: 'Quero tentar melhorar minha nota em funções.',
+      request_reason: 'Quero tentar melhorar minha nota em genética.',
       created_at: '2026-11-23T11:00:00Z',
       reviewed_at: '2026-11-23T12:00:00Z',
     });
@@ -146,8 +206,10 @@ describe('TeacherDashboard', () => {
     renderTeacherRoute('/teacher/dashboard');
 
     expect(await screen.findByText('64,5%')).toBeInTheDocument();
-    expect(screen.getByText('Funções Quadráticas')).toBeInTheDocument();
-    expect(screen.getByText('Frações e Porcentagem')).toBeInTheDocument();
+    expect(screen.getByText('Biologia Celular e Genética')).toBeInTheDocument();
+    expect(screen.getByText('História do Brasil')).toBeInTheDocument();
+    expect(screen.getByText('Maratona Aberta de Conhecimentos Gerais')).toBeInTheDocument();
+    expect(screen.getByText('78,5%')).toBeInTheDocument();
     expect(screen.getByText('Lucas Silva')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /autorizar nova tentativa/i }));
@@ -158,6 +220,21 @@ describe('TeacherDashboard', () => {
     expect(
       await screen.findByText(/nova tentativa autorizada para lucas silva/i)
     ).toBeInTheDocument();
+
+    // Test switching filter mode to "Por Simulado Avulso" and picking the standalone list
+    await user.click(screen.getByRole('button', { name: /por simulado avulso/i }));
+    const standaloneSelect = await screen.findByLabelText(/^simulado avulso$/i);
+    await user.selectOptions(standaloneSelect, '9');
+
+    await waitFor(() => {
+      expect(analyticsSpy).toHaveBeenLastCalledWith({
+        listType: 'standalone',
+        organizationId: null,
+        classroomId: null,
+        listId: '9',
+        scope: 'latest',
+      });
+    });
   });
 
   it('permite ao professor escrever comentário manual e autorizar nova tentativa na página de entrega', async () => {
@@ -168,7 +245,10 @@ describe('TeacherDashboard', () => {
       question_list_id: 5,
       question_list_title: 'Simulado 01',
       classroom_id: 1,
-      classroom_name: '9º Ano A',
+      classroom_name: '2º Ano A — Ciências',
+      organization_id: null,
+      organization_name: null,
+      is_standalone: false,
       student_id: 2,
       student_name: 'Lucas Silva',
       student_email: 'lucas@synapta.edu',
@@ -177,7 +257,7 @@ describe('TeacherDashboard', () => {
       correct_count: 1,
       total_questions: 2,
       score_percentage: 50,
-      performance_band: 'average',
+      performance_band: 'attention',
       teacher_comment: null,
       teacher_commented_at: null,
       retake_status: 'none',
@@ -192,20 +272,20 @@ describe('TeacherDashboard', () => {
     vi.spyOn(apiClient, 'getTeacherSubmissionDetail').mockResolvedValue(baseSubmission);
     vi.spyOn(apiClient, 'updateSubmissionComment').mockResolvedValue({
       ...baseSubmission,
-      teacher_comment: 'Continue praticando geometria!',
+      teacher_comment: 'Continue praticando interpretação textual!',
       teacher_commented_at: '2026-11-23T12:00:00Z',
     });
 
     renderTeacherRoute('/teacher/submissions/77');
 
     const textarea = await screen.findByLabelText(/comentário manual do professor/i);
-    await user.type(textarea, 'Continue praticando geometria!');
+    await user.type(textarea, 'Continue praticando interpretação textual!');
     await user.click(screen.getByRole('button', { name: /salvar comentário/i }));
 
     await waitFor(() => {
       expect(apiClient.updateSubmissionComment).toHaveBeenCalledWith(
         '77',
-        'Continue praticando geometria!'
+        'Continue praticando interpretação textual!'
       );
     });
     expect(
@@ -216,24 +296,26 @@ describe('TeacherDashboard', () => {
   it('exibe perfil individual do aluno com pontos fortes/fracos e permite liberar nova tentativa', async () => {
     const user = userEvent.setup();
 
+    vi.spyOn(apiClient, 'getTeacherLists').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getTeacherStudentDetail').mockResolvedValue({
       student: {
         id: 2,
         name: 'Lucas Silva',
         email: 'lucas@synapta.edu',
-        classrooms: [{ id: 1, name: '9º Ano A' }],
+        classrooms: [{ id: 1, name: '2º Ano A — Ciências', visibility: 'public' }],
       },
       summary: {
         average_score_percentage: 68.5,
         lists_completed_count: 2,
         total_attempts_count: 3,
-        strongest_topic: 'Frações e Decimais',
-        weakest_topic: 'Equações do 1º Grau',
+        standalone_submissions_count: 1,
+        strongest_topic: 'História do Brasil',
+        weakest_topic: 'Biologia Celular e Genética',
       },
       topic_performance: [
         {
           topic_id: 10,
-          topic_name: 'Equações do 1º Grau',
+          topic_name: 'Biologia Celular e Genética',
           total_answers: 6,
           correct_answers: 2,
           wrong_answers: 4,
@@ -241,7 +323,7 @@ describe('TeacherDashboard', () => {
         },
         {
           topic_id: 11,
-          topic_name: 'Frações e Decimais',
+          topic_name: 'História do Brasil',
           total_answers: 6,
           correct_answers: 6,
           wrong_answers: 0,
@@ -253,8 +335,11 @@ describe('TeacherDashboard', () => {
           submission_id: 88,
           question_list_id: 5,
           question_list_title: 'Simulado 01 — Diagnóstico',
-          classroom_id: 1,
-          classroom_name: '9º Ano A',
+          classroom_id: null,
+          classroom_name: null,
+          organization_id: null,
+          organization_name: null,
+          is_standalone: true,
           attempt_number: 1,
           attempts_on_list: 1,
           correct_count: 3,
@@ -273,8 +358,11 @@ describe('TeacherDashboard', () => {
       id: 45,
       question_list_id: 5,
       question_list_title: 'Simulado 01 — Diagnóstico',
-      classroom_id: 1,
-      classroom_name: '9º Ano A',
+      classroom_id: null,
+      classroom_name: null,
+      organization_id: null,
+      organization_name: null,
+      is_standalone: true,
       student_id: 2,
       student_name: 'Lucas Silva',
       student_email: 'lucas@synapta.edu',
@@ -290,8 +378,9 @@ describe('TeacherDashboard', () => {
 
     expect(await screen.findByRole('heading', { name: 'Lucas Silva' })).toBeInTheDocument();
     expect(screen.getByText('68,5%')).toBeInTheDocument();
-    expect(screen.getByText('Frações e Decimais')).toBeInTheDocument();
-    expect(screen.getByText('Equações do 1º Grau')).toBeInTheDocument();
+    expect(screen.getByText('História do Brasil')).toBeInTheDocument();
+    expect(screen.getByText('Biologia Celular e Genética')).toBeInTheDocument();
+    expect(screen.getByText('Simulado Avulso')).toBeInTheDocument();
     expect(screen.getByText('Tentativa #1 de 1')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /liberar nova tentativa/i }));
@@ -305,15 +394,18 @@ describe('TeacherDashboard', () => {
   });
 
   it('exibe "Sem entregas" na lista de alunos quando lists_completed_count é 0', async () => {
+    vi.spyOn(apiClient, 'getTeacherOrganizations').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getTeacherClassrooms').mockResolvedValue([]);
+    vi.spyOn(apiClient, 'getTeacherLists').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getTeacherStudents').mockResolvedValue([
       {
         student_id: 3,
         name: 'Pedro Henrique',
         email: 'pedro@synapta.edu',
-        classrooms: [{ id: 1, name: '9º Ano A' }],
+        classrooms: [{ id: 1, name: '2º Ano A — Ciências', visibility: 'public' }],
         lists_completed_count: 0,
         total_attempts_count: 0,
+        standalone_submissions_count: 0,
         average_score_percentage: 0,
         last_submitted_at: null,
         has_pending_retake: false,
@@ -330,10 +422,29 @@ describe('TeacherDashboard', () => {
   it('congela criação de novas questões quando lista possui entregas e permite editar apenas enunciado e resolução', async () => {
     const user = userEvent.setup();
 
+    vi.spyOn(apiClient, 'getTeacherClassrooms').mockResolvedValue([
+      {
+        id: 1,
+        name: '2º Ano A — Ciências',
+        description: null,
+        organization_id: null,
+        organization_name: null,
+        visibility: 'public',
+        access_code: null,
+        student_count: 10,
+        list_count: 1,
+        created_at: '2026-11-20T10:00:00Z',
+      },
+    ]);
     vi.spyOn(apiClient, 'getTeacherListDetail').mockResolvedValue({
       id: 5,
       classroom_id: 1,
-      classroom_name: '9º Ano A',
+      classroom_name: '2º Ano A — Ciências',
+      organization_id: null,
+      organization_name: null,
+      is_standalone: false,
+      visibility: 'public',
+      access_code: null,
       title: 'Simulado 01',
       description: 'Lista com submissões',
       is_published: true,
@@ -381,7 +492,7 @@ describe('TeacherDashboard', () => {
 
     await user.click(screen.getByRole('button', { name: /^editar$/i }));
 
-    expect(screen.getByLabelText(/assunto de matemática/i)).toBeDisabled();
+    expect(screen.getByLabelText(/assunto \/ matéria/i)).toBeDisabled();
     expect(screen.getByLabelText(/alternativa correta/i)).toBeDisabled();
     expect(screen.getByLabelText(/alternativa a/i)).toBeDisabled();
 
@@ -408,11 +519,17 @@ describe('TeacherDashboard', () => {
   it('não recarrega TeacherListEditorPage ao alterar o select de assunto no formulário de nova questão', async () => {
     const user = userEvent.setup();
 
+    vi.spyOn(apiClient, 'getTeacherClassrooms').mockResolvedValue([]);
     const listSpy = vi.spyOn(apiClient, 'getTeacherListDetail').mockResolvedValue({
       id: 5,
-      classroom_id: 1,
-      classroom_name: '9º Ano A',
-      title: 'Simulado 01',
+      classroom_id: null,
+      classroom_name: null,
+      organization_id: null,
+      organization_name: null,
+      is_standalone: true,
+      visibility: 'public',
+      access_code: null,
+      title: 'Simulado Avulso 01',
       description: null,
       is_published: false,
       question_count: 0,
@@ -423,13 +540,13 @@ describe('TeacherDashboard', () => {
       questions: [],
     });
     const topicsSpy = vi.spyOn(apiClient, 'getTopics').mockResolvedValue([
-      { id: 10, name: 'Equações do 1º Grau', slug: 'equacoes-1-grau', description: null },
-      { id: 11, name: 'Frações', slug: 'fracoes', description: null },
+      { id: 10, name: 'Biologia Celular', slug: 'biologia-celular', description: null },
+      { id: 11, name: 'História do Brasil', slug: 'historia-do-brasil', description: null },
     ]);
 
     renderTeacherRoute('/teacher/lists/5');
 
-    const topicSelect = await screen.findByLabelText(/assunto de matemática/i);
+    const topicSelect = await screen.findByLabelText(/assunto \/ matéria/i);
     expect(listSpy).toHaveBeenCalledTimes(1);
     expect(topicsSpy).toHaveBeenCalledTimes(1);
 
@@ -443,14 +560,17 @@ describe('TeacherDashboard', () => {
   it('permite alternar a tabela acessível de dados por assunto no gráfico de rendimento', async () => {
     const user = userEvent.setup();
 
+    vi.spyOn(apiClient, 'getTeacherOrganizations').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getTeacherClassrooms').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getTeacherLists').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getRetakeRequests').mockResolvedValue([]);
     vi.spyOn(apiClient, 'getTopicAnalytics').mockResolvedValue({
       kpis: {
+        total_organizations: 0,
         total_classrooms: 1,
         total_students: 10,
         total_published_lists: 1,
+        total_standalone_lists: 0,
         total_submissions: 5,
         overall_accuracy_percentage: 70,
         pending_retake_requests: 0,
@@ -458,7 +578,7 @@ describe('TeacherDashboard', () => {
       topics: [
         {
           topic_id: 10,
-          topic_name: 'Geometria Plana',
+          topic_name: 'Interpretação de Texto',
           total_answers: 10,
           correct_answers: 7,
           wrong_answers: 3,
@@ -467,6 +587,7 @@ describe('TeacherDashboard', () => {
       ],
       lowest_performing_topics: [],
       highest_performing_topics: [],
+      standalone_lists: [],
     });
 
     renderTeacherRoute('/teacher/dashboard');
@@ -475,7 +596,7 @@ describe('TeacherDashboard', () => {
     await user.click(toggleBtn);
 
     expect(screen.getByRole('table')).toBeInTheDocument();
-    expect(screen.getByText('Geometria Plana')).toBeInTheDocument();
+    expect(screen.getByText('Interpretação de Texto')).toBeInTheDocument();
     expect(screen.getByText('7/10')).toBeInTheDocument();
     expect(screen.getByText('Em evolução')).toBeInTheDocument();
   });

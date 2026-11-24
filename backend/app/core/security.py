@@ -4,7 +4,17 @@ from typing import Any
 import jwt
 from pwdlib import PasswordHash
 
+from app.core.access_codes import normalize_access_code, verify_access_code
 from app.core.config import settings
+
+__all__ = [
+    "create_access_token",
+    "decode_access_token",
+    "hash_password",
+    "normalize_access_code",
+    "verify_access_code",
+    "verify_password",
+]
 
 password_hasher = PasswordHash.recommended()
 

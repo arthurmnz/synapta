@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class TopicCreate(BaseModel):
-    """Payload to create a new mathematics topic."""
+    """Payload to create a new subject/topic across any discipline."""
 
     name: str = Field(min_length=2, max_length=120)
     description: str | None = Field(default=None, max_length=1000)
@@ -27,7 +27,7 @@ class TopicCreate(BaseModel):
 
 
 class TopicOut(BaseModel):
-    """Mathematics topic summary."""
+    """Subject/topic summary."""
 
     model_config = ConfigDict(from_attributes=True)
 
